@@ -25,6 +25,7 @@ import numpy as np
 import pybfs
 from baseflow.separation import chapman, lh, eckhardt, strict_baseflow
 from baseflow.estimate import recession_coefficient, maxmium_BFI
+from baseflow.skill import separation_skill, forecast_skill
 
 # Reuse functions from existing scripts
 from calibrate_all_gages import calibrate_site, load_drainage_areas
@@ -1089,6 +1090,116 @@ def api_gage_anomalies(site_no):
         return jsonify({'events': events})
     except Exception as e:
         return jsonify({'error': f'Anomaly detection failed: {str(e)}'}), 500
+
+
+# =====================================================
+# Skill Assessment
+# =====================================================
+
+def compute_skill_assessment(site_no, sf_dir=None, p_dir=None, b_dir=None):
+    """Run separation and forecast skill assessment, returning a JSON-ready dict."""
+    sf_dir = sf_dir or STREAMFLOW_DIR
+    p_dir = p_dir or PARAMS_DIR
+    b_dir = b_dir or BFF_DIR
+
+    params_path = os.path.join(p_dir, f"params_{site_no}.csv")
+    streamflow_path = os.path.join(sf_dir, f"{site_no}.csv")
+
+    if not all(os.path.exists(p) for p in [params_path, streamflow_path]):
+        return None
+
+    basin_char, gw_hyd, flow = load_site_params(params_path)
+    streamflow_df = load_streamflow(streamflow_path)
+
+    if len(streamflow_df) < 365:
+        return None
+
+    lb, x1, wb, por = basin_char[1], basin_char[2], basin_char[3], basin_char[4]
+    beta, kb = gw_hyd[1], gw_hyd[3]
+    SBT = pybfs.base_table(lb, x1, wb, beta, kb, streamflow_df, por)
+
+    # Separation skill
+    sep_skill_df, sep_metrics = separation_skill(streamflow_df, SBT, basin_char, gw_hyd, flow)
+
+    sep_dates = pd.to_datetime(sep_skill_df['Date']).dt.strftime('%Y-%m-%d').tolist()
+    sep_q = (sep_skill_df['Q'] / 86400).round(4).tolist()
+    sep_bf_bfs = (sep_skill_df['BF_bfs'] / 86400).round(4).tolist()
+    sep_res = (sep_skill_df['RES'].where(sep_skill_df['BF_strict']) / 86400).round(4).tolist()
+    sep_strict = sep_skill_df['BF_strict'].tolist()
+
+    # Forecast skill
+    fc_skill_df, fc_summary_df, fc_metrics = forecast_skill(streamflow_df, SBT, basin_char, gw_hyd, flow)
+
+    fc_dates = pd.to_datetime(fc_skill_df['Date']).dt.strftime('%Y-%m-%d').tolist()
+    fc_q = (fc_skill_df['Q'] / 86400).round(4).tolist()
+    fc_fc = (fc_skill_df['FC'] / 86400).round(4).tolist()
+    fc_res = (fc_skill_df['RES'] / 86400).round(4).tolist()
+    fc_seq = fc_skill_df['SEQ'].tolist()
+
+    fc_summary = []
+    for _, row in fc_summary_df.iterrows():
+        fc_summary.append({
+            'seq': int(row['SEQ']),
+            'start_date': pd.to_datetime(row['START']).strftime('%Y-%m-%d'),
+            'end_date': pd.to_datetime(row['END']).strftime('%Y-%m-%d'),
+            'len': int(row['LEN']),
+            'sat': round(float(row['SAT']), 3),
+            'rmse': round(float(row['RMSE']) / 86400, 4) if not np.isnan(row['RMSE']) else None,
+            'mae': round(float(row['MAE']) / 86400, 4) if not np.isnan(row['MAE']) else None,
+        })
+
+    return {
+        'separation': {
+            'rmse': round(sep_metrics['RMSE'] / 86400, 4) if sep_metrics['RMSE'] is not None and not np.isnan(sep_metrics['RMSE']) else None,
+            'mae': round(sep_metrics['MAE'] / 86400, 4) if sep_metrics['MAE'] is not None and not np.isnan(sep_metrics['MAE']) else None,
+            'n_days': sep_metrics['n_days'],
+            'frac_strict': round(sep_metrics['frac_strict'], 4) if sep_metrics['frac_strict'] is not None and not np.isnan(sep_metrics['frac_strict']) else None,
+            'dates': sep_dates,
+            'q': sep_q,
+            'bf_bfs': sep_bf_bfs,
+            'residuals': sep_res,
+            'strict_mask': sep_strict,
+        },
+        'forecast': {
+            'overall_rmse': round(fc_metrics['overall_RMSE'] / 86400, 4) if fc_metrics['overall_RMSE'] is not None and not np.isnan(fc_metrics['overall_RMSE']) else None,
+            'overall_mae': round(fc_metrics['overall_MAE'] / 86400, 4) if fc_metrics['overall_MAE'] is not None and not np.isnan(fc_metrics['overall_MAE']) else None,
+            'n_sequences': len(fc_summary),
+            'dates': fc_dates,
+            'q': fc_q,
+            'fc': fc_fc,
+            'residuals': fc_res,
+            'seq': fc_seq,
+            'summary': fc_summary,
+        },
+    }
+
+
+@app.route('/api/gage/<site_no>/skill')
+def api_gage_skill(site_no):
+    """Run separation and forecast skill assessment for a gage."""
+    if site_no not in site_info:
+        return jsonify({'error': 'Gage not found'}), 404
+    if get_gage_status(site_no) != 'calibrated':
+        return jsonify({'error': 'Not calibrated. Run calibration first.'}), 400
+
+    temp_site_dir = os.path.join(TEMP_DIR, site_no)
+    temp_sf = os.path.join(temp_site_dir, f"{site_no}.csv")
+    main_sf = os.path.join(STREAMFLOW_DIR, f"{site_no}.csv")
+
+    if os.path.exists(temp_sf):
+        sf_dir, p_dir, b_dir = temp_site_dir, temp_site_dir, temp_site_dir
+    elif os.path.exists(main_sf):
+        sf_dir, p_dir, b_dir = None, None, None
+    else:
+        return jsonify({'error': 'No streamflow data for this gage. Click Update to fetch it from USGS first.'}), 404
+
+    try:
+        result = compute_skill_assessment(site_no, sf_dir=sf_dir, p_dir=p_dir, b_dir=b_dir)
+        if result is None:
+            return jsonify({'error': 'Insufficient data for skill assessment (need at least 365 days).'}), 400
+        return safe_jsonify(result)
+    except Exception as e:
+        return jsonify({'error': f'Skill assessment failed: {str(e)}'}), 500
 
 
 # ----- Startup -----

@@ -154,6 +154,27 @@
         .drought-d4 { background: #730000; color: #fff; }
         .btn-drought { background: linear-gradient(135deg, #ef6c00, #bf360c); color: white; }
         .btn-anomaly { background: linear-gradient(135deg, #5c6bc0, #283593); color: white; }
+        .btn-skill { background: linear-gradient(135deg, #00897b, #004d40); color: white; }
+
+        /* Skill assessment */
+        .skill-metrics-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+        }
+        .skill-metric-card {
+            background: #f8f9fa; border-radius: 10px; padding: 12px 14px;
+            border-left: 4px solid #00897b; font-size: 13px;
+        }
+        .skill-metric-card.forecast { border-left-color: #5c6bc0; }
+        .skill-metric-label { color: #888; font-size: 11px; margin-bottom: 4px; }
+        .skill-metric-value { font-size: 18px; font-weight: 700; color: #222; }
+        .skill-metric-sub { font-size: 11px; color: #aaa; margin-top: 2px; }
+        .skill-section-title {
+            font-size: 13px; font-weight: 700; color: #444; margin: 14px 0 8px;
+        }
+        .skill-no-seqs {
+            background: #f8f9fa; padding: 12px; border-radius: 8px;
+            font-size: 13px; color: #666; margin-bottom: 16px;
+        }
 
         /* Anomaly cards */
         .anomaly-list { margin-bottom: 16px; }
@@ -718,6 +739,13 @@
                 </div>`;
             }
 
+            // Skill assessment section (for calibrated gages)
+            if (info.status === 'calibrated') {
+                html += `<div id="skill-container">
+                    <button class="action-btn btn-skill" style="width:100%;margin-bottom:16px" onclick="loadSkill('${siteNo}')">Evaluate Model Skill</button>
+                </div>`;
+            }
+
             // Progress area
             html += `<div id="progress-container"></div>`;
 
@@ -1112,6 +1140,122 @@
             }
             html += '</div>';
             container.innerHTML = html;
+        }
+
+        // ===== Skill Assessment =====
+        async function loadSkill(siteNo) {
+            const container = document.getElementById('skill-container');
+            container.innerHTML = '<div class="loading"><span class="spinner"></span> Running skill assessment...</div>';
+
+            let data;
+            try {
+                const resp = await fetch(`/api/gage/${siteNo}/skill`);
+                data = await resp.json();
+            } catch (e) {
+                container.innerHTML = `<div class="error-msg">Failed to load skill assessment: ${e.message}</div>`;
+                return;
+            }
+            if (data.error) {
+                container.innerHTML = `<div class="error-msg">${data.error}</div>`;
+                return;
+            }
+
+            const sep = data.separation;
+            const fc = data.forecast;
+
+            const fmtVal = (v, digits=4) => v !== null && v !== undefined ? v.toFixed(digits) : 'N/A';
+            const fmtPct = (v) => v !== null && v !== undefined ? (v * 100).toFixed(1) + '%' : 'N/A';
+
+            let html = '';
+
+            // Metric cards
+            html += '<div class="skill-metrics-grid">';
+            html += `
+                <div class="skill-metric-card">
+                    <div class="skill-metric-label">Separation RMSE</div>
+                    <div class="skill-metric-value">${fmtVal(sep.rmse)} m³/s</div>
+                    <div class="skill-metric-sub">${sep.n_days} baseflow days (${fmtPct(sep.frac_strict)} of record)</div>
+                </div>
+                <div class="skill-metric-card">
+                    <div class="skill-metric-label">Separation MAE</div>
+                    <div class="skill-metric-value">${fmtVal(sep.mae)} m³/s</div>
+                    <div class="skill-metric-sub">PyBFS vs strict-baseflow reference</div>
+                </div>
+                <div class="skill-metric-card forecast">
+                    <div class="skill-metric-label">Forecast RMSE</div>
+                    <div class="skill-metric-value">${fmtVal(fc.overall_rmse)} m³/s</div>
+                    <div class="skill-metric-sub">${fc.n_sequences} qualifying sequence${fc.n_sequences !== 1 ? 's' : ''}</div>
+                </div>
+                <div class="skill-metric-card forecast">
+                    <div class="skill-metric-label">Forecast MAE</div>
+                    <div class="skill-metric-value">${fmtVal(fc.overall_mae)} m³/s</div>
+                    <div class="skill-metric-sub">Across all baseflow sequences</div>
+                </div>
+            `;
+            html += '</div>';
+
+            // Separation residuals plot
+            html += '<div class="skill-section-title">Separation Residuals (Baseflow-Dominated Days)</div>';
+            html += `${plotHeader('Q \u2212 BF\u2099\u1d0f\u02e2 on Strict-Baseflow Days', 'plot-skill-sep', 'Scroll to zoom, drag to pan')}
+                     <div class="plot-div" id="plot-skill-sep"></div>`;
+
+            // Forecast sequences plot
+            if (fc.n_sequences > 0) {
+                html += '<div class="skill-section-title">Forecast Skill by Sequence</div>';
+                html += `${plotHeader('Per-Sequence RMSE & MAE', 'plot-skill-fc', '')}
+                         <div class="plot-div" id="plot-skill-fc"></div>`;
+            } else {
+                html += '<div class="skill-no-seqs">No qualifying baseflow sequences found for forecast skill evaluation (need ≥ 30 consecutive baseflow-dominated days).</div>';
+            }
+
+            container.innerHTML = html;
+
+            setTimeout(() => {
+                // Separation residuals scatter
+                const strictIdx = sep.strict_mask.map((v, i) => v ? i : -1).filter(i => i >= 0);
+                const resDates = strictIdx.map(i => sep.dates[i]);
+                const resVals = strictIdx.map(i => sep.residuals[i]);
+
+                const zeroLine = { x: [sep.dates[0], sep.dates[sep.dates.length - 1]], y: [0, 0],
+                    mode: 'lines', line: { color: '#999', width: 1, dash: 'dot' }, showlegend: false, hoverinfo: 'skip' };
+                const resSeries = { x: resDates, y: resVals, mode: 'markers',
+                    marker: { color: '#00897b', size: 4, opacity: 0.7 },
+                    name: 'Residual (Q \u2212 BF)', hovertemplate: '%{x}<br>%{y:.4f} m³/s<extra></extra>' };
+
+                renderChart('plot-skill-sep', [zeroLine, resSeries], {
+                    margin: { l: 60, r: 20, t: 10, b: 50 },
+                    xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
+                    yaxis: { title: { text: 'Residual (m³/s)', font: { size: 11 } }, zeroline: false },
+                    legend: { orientation: 'h', y: 1.08 },
+                    plot_bgcolor: '#fff', paper_bgcolor: '#fff',
+                    font: { family: 'Inter,sans-serif', size: 11 },
+                });
+
+                // Per-sequence RMSE/MAE bar chart
+                if (fc.n_sequences > 0) {
+                    const seqLabels = fc.summary.map(s => `Seq ${s.seq} (${s.len}d)`);
+                    const rmseVals = fc.summary.map(s => s.rmse);
+                    const maeVals = fc.summary.map(s => s.mae);
+                    const hoverTexts = fc.summary.map(s => `${s.start_date} — ${s.end_date}`);
+
+                    const rmseBar = { x: seqLabels, y: rmseVals, type: 'bar', name: 'RMSE',
+                        marker: { color: '#5c6bc0' }, text: hoverTexts, customdata: hoverTexts,
+                        hovertemplate: '<b>%{x}</b><br>%{customdata}<br>RMSE: %{y:.4f} m³/s<extra></extra>' };
+                    const maeBar = { x: seqLabels, y: maeVals, type: 'bar', name: 'MAE',
+                        marker: { color: '#9fa8da' }, text: hoverTexts, customdata: hoverTexts,
+                        hovertemplate: '<b>%{x}</b><br>%{customdata}<br>MAE: %{y:.4f} m³/s<extra></extra>' };
+
+                    renderChart('plot-skill-fc', [rmseBar, maeBar], {
+                        barmode: 'group',
+                        margin: { l: 60, r: 20, t: 10, b: 80 },
+                        xaxis: { tickangle: -30 },
+                        yaxis: { title: { text: 'Error (m³/s)', font: { size: 11 } } },
+                        legend: { orientation: 'h', y: 1.08 },
+                        plot_bgcolor: '#fff', paper_bgcolor: '#fff',
+                        font: { family: 'Inter,sans-serif', size: 11 },
+                    });
+                }
+            }, 50);
         }
 
         // ===== Processing (original data) =====
