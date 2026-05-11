@@ -1,4 +1,4 @@
-# PyBFS App
+# Low Flow Analyst (LFA)
 
 An interactive web application for exploring and analyzing baseflow separation across thousands of USGS stream gages in the contiguous United States. Built on the [PyBFS](https://github.com/BYU-Hydroinformatics/pybfs) physically-based algorithm and backed by USGS WaterServices, this tool lets researchers and practitioners calibrate models, visualize flow components, detect anomalies, and fetch live data — all from a browser.
 
@@ -7,8 +7,8 @@ An interactive web application for exploring and analyzing baseflow separation a
 ## Quick Start
 
 ```bash
-git clone git@github.com:BYU-Hydroinformatics/baseflow_analyst.git
-cd baseflow_analyst
+git clone git@github.com:BYU-Hydroinformatics/low-flow-analyst.git
+cd lfa
 python -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -43,7 +43,7 @@ Then open **http://127.0.0.1:5000** in your browser. The app ships with pre-cali
 
 ## Overview
 
-PyBFS App combines a physically-based baseflow separation model with real-time USGS data access into a single Flask application. The map view displays every active USGS stream gage that has daily discharge records, color-coded by calibration status and watershed behavior. Clicking a gage loads interactive Plotly charts without any page reload, running BFS on-the-fly from pre-calibrated parameters stored on disk.
+Low Flow Analyst (LFA) combines a physically-based baseflow separation model with real-time USGS data access into a single Flask application. The map view displays every active USGS stream gage that has daily discharge records, color-coded by calibration status and watershed behavior. Clicking a gage loads interactive Plotly charts without any page reload, running BFS on-the-fly from pre-calibrated parameters stored on disk.
 
 The backend pipeline consists of four standalone scripts that can be run once to bootstrap the dataset, after which the web app serves everything dynamically.
 
@@ -80,7 +80,7 @@ The backend pipeline consists of four standalone scripts that can be run once to
 ## Architecture
 
 ```
-pybfs_app/
+lfa/
 ├── app.py                      # Flask application (entry point)
 ├── usgs_download_all_daily.py  # Pipeline step 1: download USGS data
 ├── detect_low_flow_gages.py    # Pipeline step 2: classify low-flow gages
@@ -132,8 +132,8 @@ The `pybfs` and `baseflow` libraries ship as subdirectories under the project ro
 
 ```bash
 # Clone the repository
-git clone git@github.com:BYU-Hydroinformatics/baseflow_analyst.git
-cd baseflow_analyst
+git clone git@github.com:BYU-Hydroinformatics/low-flow-analyst.git
+cd lfa
 
 # Create and activate a virtual environment
 python -m venv venv
@@ -392,7 +392,7 @@ Serves pre-computed static plot PNGs.
 ## Directory Structure
 
 ```
-pybfs_app/
+lfa/
 ├── app.py                          # Flask application
 ├── usgs_download_all_daily.py      # Step 1: download USGS data
 ├── detect_low_flow_gages.py        # Step 2: low-flow classification

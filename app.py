@@ -1,5 +1,5 @@
 """
-PyBFS Web Application
+Low Flow Analyst (LFA)
 Interactive map-based viewer for USGS stream gage baseflow separation analysis.
 """
 import os
