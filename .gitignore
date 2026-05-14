@@ -56,6 +56,9 @@ Icon
 *.swo
 *~
 
+# ── Experiments (local scratch, not tracked) ──────────────────────────────────
+experiments/
+
 # ── Secrets / local config ────────────────────────────────────────────────────
 .env
 .env.*

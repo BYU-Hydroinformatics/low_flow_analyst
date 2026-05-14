@@ -241,6 +241,82 @@
         /* Plotly overrides for better look */
         .js-plotly-plot .plotly .modebar { top: 4px !important; right: 4px !important; }
 
+        /* Forecast sequence modal */
+        .fc-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #fff; z-index: 10001; flex-direction: column;
+        }
+        .fc-modal.active { display: flex; }
+        .fc-modal-header {
+            padding: 10px 20px; display: flex; align-items: center; gap: 14px;
+            border-bottom: 1px solid #e0e0e0; flex-shrink: 0; background: #f8f9fa;
+        }
+        .fc-nav-btn {
+            background: #fff; border: 1px solid #ddd; border-radius: 6px;
+            cursor: pointer; width: 34px; height: 34px; font-size: 20px; line-height: 1;
+            display: flex; align-items: center; justify-content: center;
+            color: #444; transition: all 0.15s; flex-shrink: 0;
+        }
+        .fc-nav-btn:hover:not(:disabled) { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; }
+        .fc-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .fc-modal-info { flex: 1; }
+        .fc-seq-label { font-size: 15px; font-weight: 700; color: #222; margin-bottom: 2px; }
+        .fc-seq-meta { font-size: 12px; color: #777; }
+        .fc-seq-metrics {
+            display: inline-flex; gap: 16px; margin-top: 3px;
+        }
+        .fc-seq-metric { font-size: 12px; color: #555; }
+        .fc-seq-metric b { color: #222; }
+        .fc-modal-close {
+            background: none; border: 1px solid #ddd; border-radius: 6px;
+            cursor: pointer; padding: 6px 14px; font-size: 13px; color: #555;
+            display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+        }
+        .fc-modal-close:hover { background: #fce4ec; border-color: #c62828; color: #c62828; }
+        .fc-modal-body { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        /* Sequence nav strip — single scrollable row, never grows */
+        #fc-nav-strip {
+            display: flex; align-items: center; gap: 5px;
+            padding: 5px 14px; flex-shrink: 0;
+            overflow-x: auto; overflow-y: hidden;
+            border-bottom: 1px solid #e8e8e8;
+            background: #fafafa;
+            scrollbar-width: thin;
+            white-space: nowrap;
+        }
+        #fc-nav-strip::-webkit-scrollbar { height: 4px; }
+        #fc-nav-strip::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+        .fc-strip-label {
+            font-size: 10px; font-weight: 700; color: #aaa; letter-spacing: 0.8px;
+            text-transform: uppercase; flex-shrink: 0; margin-right: 4px;
+        }
+        .fc-seq-pill {
+            display: inline-flex; align-items: center; flex-shrink: 0;
+            padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 600;
+            color: #fff; cursor: pointer; border: 2px solid transparent;
+            transition: transform 0.1s, border-color 0.1s; white-space: nowrap;
+        }
+        .fc-seq-pill:hover { transform: scale(1.08); }
+        .fc-seq-pill.active { border-color: #222; box-shadow: 0 0 0 2px rgba(0,0,0,0.15); }
+        /* Top overview row */
+        .fc-overview-wrap {
+            flex-shrink: 0; display: flex; flex-direction: column;
+            border-bottom: 2px solid #e0e0e0; cursor: crosshair;
+        }
+        /* Bottom detail row */
+        .fc-detail-row { display: flex; flex: 1; overflow: hidden; }
+        .fc-panel {
+            flex: 1; display: flex; flex-direction: column; overflow: hidden;
+            border-right: 1px solid #e8e8e8;
+        }
+        .fc-panel:last-child { border-right: none; }
+        .fc-panel-label {
+            padding: 5px 12px; font-size: 11px; font-weight: 700; color: #888;
+            text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0;
+            background: #fafafa; border-bottom: 1px solid #f0f0f0;
+        }
+        .fc-panel-plot { flex: 1; }
+
         /* Search box */
         .search-control {
             position: relative;
@@ -316,6 +392,38 @@
         <div class="fs-body" id="fs-body"></div>
     </div>
 
+    <!-- Forecast sequence modal -->
+    <div class="fc-modal" id="forecast-modal">
+        <div class="fc-modal-header">
+            <button class="fc-nav-btn" id="fc-nav-prev" onclick="navigateForecast(-1)" title="Previous sequence (&#8592;)">&#8592;</button>
+            <button class="fc-nav-btn" id="fc-nav-next" onclick="navigateForecast(1)" title="Next sequence (&#8594;)">&#8594;</button>
+            <div class="fc-modal-info" id="fc-modal-info"></div>
+            <button class="fc-modal-close" onclick="closeForecastModal()">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                Close (Esc)
+            </button>
+        </div>
+        <div id="fc-nav-strip"></div>
+        <div class="fc-modal-body">
+            <!-- Top: full hydrograph — click any sequence to focus -->
+            <div class="fc-overview-wrap">
+                <div class="fc-panel-label" style="cursor:default">Full Hydrograph &mdash; click a highlighted sequence to focus</div>
+                <div id="fc-modal-overview"></div>
+            </div>
+            <!-- Bottom: zoomed + forecast side by side -->
+            <div class="fc-detail-row">
+                <div class="fc-panel">
+                    <div class="fc-panel-label">Zoomed to sequence</div>
+                    <div class="fc-panel-plot" id="fc-modal-hyd"></div>
+                </div>
+                <div class="fc-panel">
+                    <div class="fc-panel-label">Forecast vs Observed</div>
+                    <div class="fc-panel-plot" id="fc-modal-fc"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="app">
         <div id="map"></div>
         <div id="panel">
@@ -354,6 +462,9 @@
         let hasUpdatedResults = {};  // site_no -> bool
         let favorites = new Set();
         let filterFavoritesOnly = false;
+        let currentSymbolize = 'status';
+        let forecastModalData = null;
+        let currentSeqIdx = 0;
 
         function loadFavorites() {
             try {
@@ -364,6 +475,100 @@
 
         function saveFavorites() {
             localStorage.setItem('baseflow_favorites', JSON.stringify([...favorites]));
+        }
+
+        // ===== Symbolize by Metric =====
+        const RAMPS = {
+            rmse:        { stops: ['#2e7d32', '#ffca28', '#d32f2f'], label: 'Forecast RMSE',  unit: 'cfs·day' },
+            mae:         { stops: ['#2e7d32', '#ffca28', '#d32f2f'], label: 'Forecast MAE',   unit: 'cfs·day' },
+            n_sequences: { stops: ['#e3f2fd', '#1565c0'],            label: 'N Sequences',    unit: '' },
+            drain_area:  { stops: ['#e8f5e9', '#1b5e20'],            label: 'Drainage Area',  unit: 'mi²' },
+        };
+        const METRIC_KEY = { rmse: 'overall_RMSE', mae: 'overall_MAE', n_sequences: 'n_sequences', drain_area: 'drain_area_sqmi' };
+        let metricRanges = {};
+
+        function lerpColor(a, b, t) {
+            const parse = h => [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)];
+            const [ar,ag,ab] = parse(a), [br,bg,bb] = parse(b);
+            const r = Math.round(ar+(br-ar)*t), g = Math.round(ag+(bg-ag)*t), bv = Math.round(ab+(bb-ab)*t);
+            return '#'+[r,g,bv].map(v=>v.toString(16).padStart(2,'0')).join('');
+        }
+
+        function getColorFromRamp(stops, t) {
+            if (stops.length === 2) return lerpColor(stops[0], stops[1], t);
+            return t <= 0.5 ? lerpColor(stops[0], stops[1], t*2) : lerpColor(stops[1], stops[2], (t-0.5)*2);
+        }
+
+        function computeMetricRanges() {
+            for (const [m, key] of Object.entries(METRIC_KEY)) {
+                const vals = allGages.map(g => g[key]).filter(v => v != null && isFinite(v)).sort((a,b) => a-b);
+                if (!vals.length) { metricRanges[m] = { min: 0, max: 1 }; continue; }
+                metricRanges[m] = {
+                    min: vals[Math.max(0, Math.floor(vals.length * 0.05))],
+                    max: vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.95))],
+                };
+            }
+        }
+
+        function getMarkerColor(gage) {
+            if (currentSymbolize === 'status') return gage.status === 'calibrated' ? '#2e7d32' : '#e65100';
+            const ramp = RAMPS[currentSymbolize];
+            if (!ramp) return '#999';
+            const val = gage[METRIC_KEY[currentSymbolize]];
+            if (val == null || !isFinite(val)) return '#bbb';
+            const {min, max} = metricRanges[currentSymbolize] || {min:0, max:1};
+            const t = max === min ? 0.5 : Math.max(0, Math.min(1, (val - min) / (max - min)));
+            return getColorFromRamp(ramp.stops, t);
+        }
+
+        function recolorMarkers() {
+            for (const gage of allGages) {
+                const marker = markerMap[gage.site_no];
+                if (!marker) continue;
+                const isFav = favorites.has(gage.site_no);
+                marker.setStyle({ fillColor: getMarkerColor(gage), color: isFav ? '#FFD600' : '#fff' });
+            }
+            updateLegendDisplay();
+        }
+
+        function formatMetricVal(val, metric) {
+            if (val == null || !isFinite(val)) return '?';
+            if (metric === 'drain_area') return val.toLocaleString(undefined, {maximumFractionDigits: 0});
+            if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M';
+            if (val >= 1e3) return (val / 1e3).toFixed(0) + 'K';
+            return val.toFixed(0);
+        }
+
+        function updateLegendDisplay() {
+            const statusEl = document.getElementById('status-legend');
+            const rampEl = document.getElementById('ramp-legend');
+            if (!statusEl || !rampEl) return;
+            if (currentSymbolize === 'status') {
+                statusEl.style.display = '';
+                rampEl.style.display = 'none';
+            } else {
+                statusEl.style.display = 'none';
+                const ramp = RAMPS[currentSymbolize];
+                const range = metricRanges[currentSymbolize] || {min: 0, max: 1};
+                const gradient = ramp.stops.length === 2
+                    ? `linear-gradient(to right, ${ramp.stops[0]}, ${ramp.stops[1]})`
+                    : `linear-gradient(to right, ${ramp.stops[0]}, ${ramp.stops[1]}, ${ramp.stops[2]})`;
+                rampEl.innerHTML = `
+                    <div style="background:${gradient};height:10px;width:142px;border-radius:3px;margin:4px 0 2px 0;border:1px solid #ddd;"></div>
+                    <div style="display:flex;justify-content:space-between;width:142px;font-size:10px;color:#555;">
+                        <span>${formatMetricVal(range.min, currentSymbolize)}</span>
+                        <span>${formatMetricVal(range.max, currentSymbolize)}</span>
+                    </div>
+                    ${ramp.unit ? `<div style="font-size:10px;color:#888;margin-top:1px;">${ramp.unit}</div>` : ''}
+                    <div style="font-size:10px;color:#888;margin-top:3px;"><span class="legend-dot" style="background:#bbb;"></span> No data</div>
+                `;
+                rampEl.style.display = '';
+            }
+        }
+
+        function onSymbolizeChange() {
+            currentSymbolize = document.getElementById('symbolize-select').value;
+            recolorMarkers();
         }
 
         // ===== Plotly layout defaults =====
@@ -451,9 +656,21 @@
             legend.onAdd = function() {
                 const div = L.DomUtil.create('div', 'legend');
                 div.innerHTML = `
-                    <b>Gage Status</b><br>
-                    <span class="legend-dot" style="background:#2e7d32;"></span> Calibrated<br>
-                    <span class="legend-dot" style="background:#e65100;"></span> Not Calibrated
+                    <div style="margin-bottom:6px;">
+                        <b style="font-size:12px;">Symbolize by</b>
+                        <select id="symbolize-select" onchange="onSymbolizeChange()" style="display:block;width:100%;margin-top:4px;font-size:11px;padding:3px 4px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;">
+                            <option value="status">Calibration Status</option>
+                            <option value="rmse">Forecast RMSE</option>
+                            <option value="mae">Forecast MAE</option>
+                            <option value="n_sequences">N Sequences</option>
+                            <option value="drain_area">Drainage Area</option>
+                        </select>
+                    </div>
+                    <div id="status-legend">
+                        <span class="legend-dot" style="background:#2e7d32;"></span> Calibrated<br>
+                        <span class="legend-dot" style="background:#e65100;"></span> Not Calibrated
+                    </div>
+                    <div id="ramp-legend" style="display:none;"></div>
                     <hr class="legend-divider">
                     <div class="toggle-row" onclick="toggleClustering()">
                         <span class="toggle-switch on" id="cluster-toggle"></span>
@@ -498,10 +715,10 @@
         async function loadGages() {
             const resp = await fetch('/api/gages');
             allGages = await resp.json();
+            computeMetricRanges();
             allMarkers = [];
             for (const gage of allGages) {
-                const isCalibrated = gage.status === 'calibrated';
-                const color = isCalibrated ? '#2e7d32' : '#e65100';
+                const color = getMarkerColor(gage);
                 const isFav = favorites.has(gage.site_no);
                 const marker = L.circleMarker([gage.lat, gage.lng], {
                     radius: 6, fillColor: color, color: isFav ? '#FFD600' : '#fff',
@@ -514,6 +731,7 @@
                 allMarkers.push(marker);
             }
             clusterGroup.addLayers(allMarkers);
+            updateLegendDisplay();
         }
 
         function getFilteredMarkers() {
@@ -1160,6 +1378,7 @@
                 return;
             }
 
+            forecastModalData = data;  // store for modal re-open
             const sep = data.separation;
             const fc = data.forecast;
 
@@ -1202,6 +1421,10 @@
             // Forecast sequences plot
             if (fc.n_sequences > 0) {
                 html += '<div class="skill-section-title">Forecast Skill by Sequence</div>';
+                html += `<button class="action-btn btn-skill" style="width:100%;margin-bottom:10px;font-size:12px;padding:8px"
+                            onclick="openForecastModal(forecastModalData, 0)">
+                            &#9654; View Hydrograph Sequences
+                         </button>`;
                 html += `${plotHeader('Per-Sequence RMSE & MAE', 'plot-skill-fc', '')}
                          <div class="plot-div" id="plot-skill-fc"></div>`;
             } else {
@@ -1254,6 +1477,11 @@
                         plot_bgcolor: '#fff', paper_bgcolor: '#fff',
                         font: { family: 'Inter,sans-serif', size: 11 },
                     });
+                }
+
+                // Auto-open forecast modal zoomed to the first sequence
+                if (fc.n_sequences > 0) {
+                    openForecastModal(data, 0);
                 }
             }, 50);
         }
@@ -1565,12 +1793,289 @@
             openPanel(siteNo);
         }
 
+        // ===== Forecast Sequence Modal =====
+
+        let fcTransitioning = false;
+        let overviewClickBound = false;
+
+        // RMSE → hsla color (green=low error, red=high error)
+        function rmseToColor(rmse, minR, maxR, alpha) {
+            alpha = alpha !== undefined ? alpha : 1;
+            if (rmse === null || isNaN(rmse) || minR === maxR)
+                return `hsla(207,55%,52%,${alpha})`;
+            const t   = Math.max(0, Math.min(1, (rmse - minR) / (maxR - minR)));
+            const hue = Math.round(118 - 118 * t);
+            const sat = Math.round(60 + 10 * t);
+            const lum = Math.round(44 + 4 * (1 - t));
+            return `hsla(${hue},${sat}%,${lum}%,${alpha})`;
+        }
+
+        // Filter all fc arrays down to a single sequence
+        function fcSeqData(seqIdx) {
+            const fc  = forecastModalData.forecast;
+            const seq = fc.summary[seqIdx];
+            const mask = fc.seq.map(s => s !== null && Math.round(s) === seq.seq);
+            return {
+                seq,
+                dates: fc.dates.filter((_, i) => mask[i]),
+                q:     fc.q.filter((_, i) => mask[i]),
+                fc:    fc.fc.filter((_, i) => mask[i]),
+            };
+        }
+
+        // Compute plot heights for all three panels from the modal's live dimensions
+        function fcHeights() {
+            const modalEl  = document.getElementById('forecast-modal');
+            const headerEl = modalEl.querySelector('.fc-modal-header');
+            const stripEl  = document.getElementById('fc-nav-strip');
+            const labelH   = 28;
+            const usable   = modalEl.clientHeight
+                           - headerEl.offsetHeight
+                           - (stripEl ? stripEl.offsetHeight : 0);
+            const overviewH = Math.max(140, Math.floor(usable * 0.3) - labelH);
+            const detailH   = Math.max(170, Math.floor(usable * 0.7) - labelH - 4);
+            return { overviewH, detailH };
+        }
+
+        // Context x-range for zoomed panel (sequence ± 60 days)
+        function fcContextRange(seqIdx) {
+            const fc  = forecastModalData.forecast;
+            const s   = fc.summary[seqIdx];
+            const all = fc.dates;
+            const si  = all.indexOf(s.start_date);
+            const ei  = all.indexOf(s.end_date);
+            return [all[Math.max(0, si - 60)], all[Math.min(all.length - 1, ei + 60)]];
+        }
+
+        function updateFcHeader(seqIdx) {
+            const fc  = forecastModalData.forecast;
+            const seq = fc.summary[seqIdx];
+            const n   = fc.summary.length;
+            const rmseStr = seq.rmse !== null ? seq.rmse.toFixed(4) : 'N/A';
+            const maeStr  = seq.mae  !== null ? seq.mae.toFixed(4)  : 'N/A';
+            document.getElementById('fc-modal-info').innerHTML = `
+                <div class="fc-seq-label">Sequence ${seq.seq} <span style="font-weight:400;color:#aaa">of ${n}</span></div>
+                <div class="fc-seq-meta">${seq.start_date} &mdash; ${seq.end_date} &nbsp;&middot;&nbsp; ${seq.len} days</div>
+                <div class="fc-seq-metrics">
+                    <span class="fc-seq-metric">RMSE: <b>${rmseStr} m&sup3;/s</b></span>
+                    <span class="fc-seq-metric">MAE: <b>${maeStr} m&sup3;/s</b></span>
+                </div>
+            `;
+            document.getElementById('fc-nav-prev').disabled = n <= 1;
+            document.getElementById('fc-nav-next').disabled = n <= 1;
+        }
+
+        function updateNavStrip(seqIdx) {
+            const fc    = forecastModalData.forecast;
+            const rmses = fc.summary.map(s => s.rmse).filter(v => v !== null && !isNaN(v));
+            const minR  = rmses.length ? Math.min(...rmses) : 0;
+            const maxR  = rmses.length ? Math.max(...rmses) : 1;
+            const strip = document.getElementById('fc-nav-strip');
+            let html = '<span class="fc-strip-label">SEQUENCES</span>';
+            fc.summary.forEach((s, i) => {
+                const bg  = rmseToColor(s.rmse, minR, maxR, 1);
+                const tip = `Seq ${s.seq}: ${s.start_date} — ${s.end_date}\n${s.len} days · RMSE ${s.rmse !== null ? s.rmse.toFixed(4) : 'N/A'} m³/s`;
+                html += `<div class="fc-seq-pill${i === seqIdx ? ' active' : ''}"
+                              style="background:${bg}" onclick="gotoSequence(${i})"
+                              title="${tip}">S${s.seq} &middot; ${s.len}d</div>`;
+            });
+            strip.innerHTML = html;
+            const active = strip.querySelector('.active');
+            if (active) active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+
+        // Top panel: full hydrograph with all sequences as clickable colored regions
+        function renderOverviewPanel(seqIdx) {
+            const fc    = forecastModalData.forecast;
+            const rmses = fc.summary.map(s => s.rmse).filter(v => v !== null && !isNaN(v));
+            const minR  = rmses.length ? Math.min(...rmses) : 0;
+            const maxR  = rmses.length ? Math.max(...rmses) : 1;
+            const { overviewH } = fcHeights();
+
+            const traces = [];
+
+            const qMax = Math.max(...fc.q.filter(v => v !== null && !isNaN(v))) * 1.5 || 1;
+
+            // Clickable filled region per sequence (traces 1..N → curveNumber maps to seqIdx)
+            fc.summary.forEach((s, i) => {
+                const isActive = i === seqIdx;
+                const fill  = rmseToColor(s.rmse, minR, maxR, isActive ? 0.32 : 0.14);
+                const line  = rmseToColor(s.rmse, minR, maxR, isActive ? 0.9 : 0.4);
+                const rmseLabel = s.rmse !== null ? s.rmse.toFixed(4) : 'N/A';
+                traces.push({
+                    x: [s.start_date, s.end_date, s.end_date, s.start_date, s.start_date],
+                    y: [0, 0, qMax, qMax, 0],
+                    fill: 'toself', fillcolor: fill, mode: 'lines',
+                    line: { color: line, width: isActive ? 1.5 : 0.5 },
+                    name: `S${s.seq}`, showlegend: false,
+                    hovertemplate: `<b>Seq ${s.seq}</b><br>${s.start_date} — ${s.end_date}<br>${s.len} days · RMSE ${rmseLabel} m³/s<br><i>Click to focus</i><extra></extra>`,
+                    customdata: Array(5).fill(i),
+                });
+            });
+
+            // Streamflow on top so it reads through the regions
+            traces.push({
+                x: fc.dates, y: fc.q, name: 'Observed Q', mode: 'lines',
+                line: { color: '#37474F', width: 0.9 },
+                hovertemplate: '%{x}: %{y:.3f} m³/s<extra>Q</extra>',
+            });
+
+            const annotations = fc.summary.map((s, i) => ({
+                x: s.start_date, y: 1, yref: 'paper',
+                text: `S${s.seq}`, showarrow: false,
+                xanchor: 'left', yanchor: 'top',
+                font: { size: 9, color: i === seqIdx ? '#1565C0' : '#BDBDBD' },
+            }));
+
+            Plotly.react('fc-modal-overview', traces, {
+                margin: { l: 55, r: 12, t: 6, b: 32 },
+                height: overviewH,
+                plot_bgcolor: '#f9f9f9', paper_bgcolor: '#fff',
+                font: { family: '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif', size: 10 },
+                hovermode: 'closest',
+                showlegend: false,
+                xaxis: { gridcolor: '#eee', zeroline: false },
+                yaxis: { gridcolor: '#eee', zeroline: false, rangemode: 'tozero',
+                         title: { text: 'Q (m³/s)', font: { size: 10 } } },
+                annotations,
+            }, { ...plotlyConfig, responsive: false });
+
+            // Bind click handler once per modal open
+            if (!overviewClickBound) {
+                document.getElementById('fc-modal-overview').on('plotly_click', function(data) {
+                    if (!data || !data.points.length) return;
+                    const curve = data.points[0].curveNumber;
+                    // Traces 0..N-1 are the sequence regions; last trace is the Q line
+                    if (curve < forecastModalData.forecast.summary.length) {
+                        gotoSequence(curve);
+                    }
+                });
+                overviewClickBound = true;
+            }
+        }
+
+        // Bottom-left: zoomed to active sequence ± context
+        function renderHydPanel(seqIdx) {
+            const { seq, dates: seqDates, q: seqQ } = fcSeqData(seqIdx);
+            const [ctxStart, ctxEnd] = fcContextRange(seqIdx);
+            const { detailH } = fcHeights();
+
+            const traces = [
+                { x: forecastModalData.forecast.dates, y: forecastModalData.forecast.q,
+                  name: 'Observed Q', mode: 'lines', line: { color: '#546E7A', width: 1 } },
+                { x: seqDates, y: seqQ, name: 'Active sequence', mode: 'lines',
+                  line: { color: '#2196F3', width: 2.5 } },
+            ];
+            Plotly.react('fc-modal-hyd', traces, {
+                margin: { l: 58, r: 12, t: 8, b: 42 }, height: detailH,
+                plot_bgcolor: '#fafafa', paper_bgcolor: '#fff',
+                font: { family: '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif', size: 11 },
+                hovermode: 'x unified',
+                legend: { orientation: 'h', y: 1.06, font: { size: 10 } },
+                xaxis: { gridcolor: '#e8e8e8', zeroline: false, range: [ctxStart, ctxEnd],
+                         title: { text: 'Date', font: { size: 10 } } },
+                yaxis: { gridcolor: '#e8e8e8', zeroline: false, rangemode: 'tozero',
+                         title: { text: 'Flow (m³/s)', font: { size: 10 } } },
+                shapes: [{ type: 'rect', x0: seq.start_date, x1: seq.end_date,
+                    y0: 0, y1: 1, yref: 'paper',
+                    fillcolor: 'rgba(33,150,243,0.08)',
+                    line: { width: 1.5, color: '#2196F3' } }],
+            }, { ...plotlyConfig, responsive: false });
+        }
+
+        // Bottom-right: forecast vs observed + error band
+        function renderFcPanel(seqIdx) {
+            const { dates: seqDates, q: seqQ, fc: seqFcVals } = fcSeqData(seqIdx);
+            const residuals = seqQ.map((q, i) =>
+                q !== null && seqFcVals[i] !== null ? q - seqFcVals[i] : null);
+            const { detailH } = fcHeights();
+
+            const traces = [
+                { x: seqDates, y: residuals, name: 'Error (Q − Forecast)',
+                  mode: 'lines', fill: 'tozeroy', fillcolor: 'rgba(244,67,54,0.12)',
+                  line: { color: 'rgba(244,67,54,0.45)', width: 1 }, yaxis: 'y2' },
+                { x: seqDates, y: seqFcVals, name: 'Forecast BF', mode: 'lines',
+                  line: { color: '#5c6bc0', width: 2, dash: 'dash' } },
+                { x: seqDates, y: seqQ, name: 'Observed Q', mode: 'lines',
+                  line: { color: '#222', width: 1.5 } },
+            ];
+            Plotly.react('fc-modal-fc', traces, {
+                margin: { l: 58, r: 50, t: 8, b: 42 }, height: detailH,
+                plot_bgcolor: '#fafafa', paper_bgcolor: '#fff',
+                font: { family: '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif', size: 11 },
+                hovermode: 'x unified',
+                legend: { orientation: 'h', y: 1.06, font: { size: 10 } },
+                xaxis: { gridcolor: '#e8e8e8', zeroline: false,
+                         title: { text: 'Date', font: { size: 10 } } },
+                yaxis: { gridcolor: '#e8e8e8', zeroline: false, rangemode: 'tozero',
+                         title: { text: 'Flow (m³/s)', font: { size: 10 } } },
+                yaxis2: { overlaying: 'y', side: 'right', zeroline: true,
+                          zerolinecolor: '#f44336', zerolinewidth: 1, showgrid: false,
+                          title: { text: 'Error (m³/s)', font: { size: 9, color: '#f44336' } },
+                          tickfont: { color: '#f44336', size: 9 } },
+            }, { ...plotlyConfig, responsive: false });
+        }
+
+        function openForecastModal(skillData, seqIdx) {
+            forecastModalData = skillData;
+            currentSeqIdx = seqIdx;
+            overviewClickBound = false;
+            document.getElementById('forecast-modal').classList.add('active');
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                updateFcHeader(seqIdx);
+                updateNavStrip(seqIdx);
+                renderOverviewPanel(seqIdx);
+                renderHydPanel(seqIdx);
+                renderFcPanel(seqIdx);
+            }));
+        }
+
+        function closeForecastModal() {
+            document.getElementById('forecast-modal').classList.remove('active');
+            overviewClickBound = false;
+            Plotly.purge('fc-modal-overview');
+            Plotly.purge('fc-modal-hyd');
+            Plotly.purge('fc-modal-fc');
+        }
+
+        function navigateForecast(dir) {
+            const n = forecastModalData.forecast.summary.length;
+            gotoSequence((currentSeqIdx + dir + n) % n);
+        }
+
+        async function gotoSequence(newIdx) {
+            if (fcTransitioning || newIdx === currentSeqIdx) return;
+            fcTransitioning = true;
+            document.getElementById('forecast-modal').classList.add('transitioning');
+            document.getElementById('fc-modal-fc').classList.add('fc-fading');
+
+            currentSeqIdx = newIdx;
+            updateFcHeader(newIdx);
+            updateNavStrip(newIdx);
+            // Re-render overview with new sequence highlighted
+            renderOverviewPanel(newIdx);
+            // Small pause so the overview highlight is visible before detail updates
+            await new Promise(r => setTimeout(r, 120));
+            renderHydPanel(newIdx);
+            renderFcPanel(newIdx);
+            document.getElementById('fc-modal-fc').classList.remove('fc-fading');
+            document.getElementById('forecast-modal').classList.remove('transitioning');
+            fcTransitioning = false;
+        }
+
         // ===== Keyboard =====
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                const fcModal = document.getElementById('forecast-modal');
+                if (fcModal.classList.contains('active')) { closeForecastModal(); return; }
                 const fs = document.getElementById('fs-overlay');
                 if (fs.classList.contains('active')) { closeFullscreen(); return; }
                 closePanel();
+            }
+            // Arrow key navigation for forecast modal
+            if (document.getElementById('forecast-modal').classList.contains('active')) {
+                if (e.key === 'ArrowLeft')  { navigateForecast(-1); return; }
+                if (e.key === 'ArrowRight') { navigateForecast(1);  return; }
             }
             // Ctrl/Cmd+K to focus search
             if ((e.ctrlKey || e.metaKey) && e.key === 'k') {

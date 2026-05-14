@@ -8,6 +8,8 @@ matplotlib.use('Agg')  # Non-interactive backend for batch processing
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
+import plotly.graph_objects as go
+
 import pybfs
 
 # Unit conversions
@@ -88,36 +90,58 @@ def plot_flow_components_pie(bfs_out, bff_df, site_no, save_path):
 
 
 def plot_forecast_result(streamflow_df, bfs_out, forecast_out, site_no, save_path):
-    """Plot last year of training data + forecast period."""
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    # Show last 365 days of training for context
+    """Interactive Plotly forecast: last year of training + forecast period, saved as HTML."""
     train_dates = pd.to_datetime(bfs_out['Date'])
     cutoff = train_dates.iloc[-1] - pd.Timedelta(days=365)
     mask = train_dates >= cutoff
 
-    ax.plot(train_dates[mask], bfs_out.loc[mask, 'Qob'] / 86400,
-            color='black', linewidth=0.8, label='Observed Streamflow')
-    ax.plot(train_dates[mask], bfs_out.loc[mask, 'Baseflow'] / 86400,
-            color='#2196F3', linewidth=1.5, label='Baseflow (training)')
-
-    # Forecast
     fc_dates = pd.to_datetime(forecast_out['Date'])
-    ax.plot(fc_dates, forecast_out['Baseflow'] / 86400,
-            color='#2196F3', linewidth=1.5, linestyle='--', label='Baseflow (forecast)')
-    ax.axvline(fc_dates.iloc[0], color='gray', linestyle=':', linewidth=1, label='Forecast start')
+    fc_start = fc_dates.iloc[0]
 
-    ax.set_xlabel('Date')
-    ax.set_ylabel('Flow (m\u00b3/s)')
-    ax.set_title(f'Baseflow Forecast ({FORECAST_DAYS} days) - Site {site_no}')
-    ax.legend(loc='upper right')
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate()
-    ax.grid(True, linestyle='--', alpha=0.3)
-    plt.tight_layout()
-    fig.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=train_dates[mask],
+        y=bfs_out.loc[mask, 'Qob'] / 86400,
+        name='Observed Streamflow',
+        mode='lines',
+        line=dict(color='#37474F', width=1),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=train_dates[mask],
+        y=bfs_out.loc[mask, 'Baseflow'] / 86400,
+        name='Baseflow (training)',
+        mode='lines',
+        line=dict(color='#2196F3', width=2),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=fc_dates,
+        y=forecast_out['Baseflow'] / 86400,
+        name='Baseflow (forecast)',
+        mode='lines',
+        line=dict(color='#2196F3', width=2, dash='dash'),
+    ))
+
+    fig.add_vline(
+        x=fc_start,
+        line=dict(color='gray', dash='dot', width=1.5),
+        annotation_text='Forecast start',
+        annotation_position='top right',
+    )
+
+    fig.update_layout(
+        title=f'Baseflow Forecast ({FORECAST_DAYS} days) \u2014 Site {site_no}',
+        xaxis_title='Date',
+        yaxis_title='Flow (m\u00b3/s)',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        hovermode='x unified',
+        template='plotly_white',
+        height=500,
+    )
+
+    fig.write_html(save_path)
 
 
 def plot_confidence_intervals(bfs_out, ci_df, site_no, save_path):
@@ -270,7 +294,7 @@ def process_site(site_no, streamflow_dir, params_dir, bff_dir, output_dir):
         forecast_out.to_csv(os.path.join(site_dir, 'forecast.csv'), index=False)
 
         plot_forecast_result(streamflow_df, bfs_out, forecast_out, site_no,
-                             os.path.join(site_dir, 'forecast.png'))
+                             os.path.join(site_dir, 'forecast.html'))
     except Exception:
         pass  # Forecast may fail for some sites
 
@@ -332,7 +356,7 @@ def main():
     print(f"  - annual_bfi.png: annual baseflow index bar chart")
     print(f"  - confidence_intervals.png: baseflow with 90% credible interval")
     print(f"  - ci_table.csv / ci_daily.csv: credible interval data")
-    print(f"  - forecast.csv / forecast.png: {FORECAST_DAYS}-day baseflow forecast")
+    print(f"  - forecast.csv / forecast.html: {FORECAST_DAYS}-day baseflow forecast (interactive Plotly)")
 
 
 if __name__ == '__main__':

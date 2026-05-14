@@ -5,6 +5,7 @@ Interactive map-based viewer for USGS stream gage baseflow separation analysis.
 import os
 import sys
 import json
+import math
 import time
 import ssl
 import tempfile
@@ -53,6 +54,7 @@ FORECAST_DAYS = 90
 site_info = {}          # site_no -> {name, lat, lng, drain_area_sqmi, drain_area_m2}
 nwm_info = {}           # site_no -> {behavior, nwm_id, stream_order}
 low_flow_info = {}      # site_no -> {'has_lowflow': bool, 'max_lowflow_duration': int}
+metrics_info = {}       # site_no -> {overall_RMSE, overall_MAE, n_sequences}
 processing_status = {}  # site_no -> {stage, progress, message, error, done}
 fips_cache = {}         # (lat, lng) -> county FIPS code
 
@@ -136,6 +138,26 @@ def load_low_flow_data():
         }
     count = sum(1 for v in low_flow_info.values() if v['has_lowflow'])
     print(f"Loaded low-flow classification: {count}/{len(low_flow_info)} gages have low-flow periods")
+
+
+def load_metrics_data():
+    """Load pre-computed forecast skill metrics at startup."""
+    path = os.path.join(BASE_DIR, "forecast_skill", "output", "metrics.csv")
+    if not os.path.exists(path):
+        print("Warning: forecast_skill/output/metrics.csv not found.")
+        return
+    df = pd.read_csv(path, dtype={'site_no': str})
+    for _, row in df.iterrows():
+        site_no = str(row['site_no']).zfill(8)
+        try:
+            metrics_info[site_no] = {
+                'overall_RMSE': float(row['overall_RMSE']) if pd.notna(row.get('overall_RMSE')) else None,
+                'overall_MAE': float(row['overall_MAE']) if pd.notna(row.get('overall_MAE')) else None,
+                'n_sequences': int(row['n_sequences']) if pd.notna(row.get('n_sequences')) else None,
+            }
+        except (ValueError, TypeError):
+            pass
+    print(f"Loaded forecast metrics for {len(metrics_info)} gages")
 
 
 def get_gage_status(site_no):
@@ -387,6 +409,15 @@ def api_gages():
             entry['behavior'] = nwm.get('behavior')
             entry['ref_status'] = nwm.get('ref_status')
         entry['has_lowflow'] = low_flow_info.get(site_no, {}).get('has_lowflow', False)
+        drain = info.get('drain_area_sqmi')
+        entry['drain_area_sqmi'] = drain if (drain is not None and math.isfinite(drain)) else None
+        if site_no in metrics_info:
+            m = metrics_info[site_no]
+            rmse = m.get('overall_RMSE')
+            mae  = m.get('overall_MAE')
+            entry['overall_RMSE'] = rmse if (rmse is not None and math.isfinite(rmse)) else None
+            entry['overall_MAE']  = mae  if (mae  is not None and math.isfinite(mae))  else None
+            entry['n_sequences']  = m.get('n_sequences')
         gages.append(entry)
     return jsonify(gages)
 
@@ -1206,6 +1237,7 @@ def api_gage_skill(site_no):
 load_site_info_data()
 load_nwm_data()
 load_low_flow_data()
+load_metrics_data()
 
 if __name__ == '__main__':
     os.makedirs(TEMP_DIR, exist_ok=True)
