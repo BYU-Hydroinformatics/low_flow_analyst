@@ -72,6 +72,7 @@ The backend pipeline consists of four standalone scripts that can be run once to
 
 ### Map Interface
 - Leaflet-based interactive map with marker clustering
+- **Symbolize by metric** — color-ramp the map by Forecast RMSE, Forecast MAE, number of evaluated sequences, or drainage area; quantile-scaled gradient legend updates in the panel
 - Filter panel: calibration status, NWM behavior, GAGES-II class, low-flow gages
 - Side panel with gage metadata, calibration trigger, and tabbed chart view
 
@@ -122,6 +123,8 @@ matplotlib
 scipy
 statsmodels
 numba
+tqdm
+plotly
 ```
 
 The `pybfs` and `baseflow` libraries ship as subdirectories under the project root and are added to `sys.path` automatically by `app.py`.
@@ -221,7 +224,7 @@ python run_bfs_all_gages.py
 - `annual_bfi.png` — annual Baseflow Index bar chart
 - `confidence_intervals.png` — baseflow with 90% credible interval band
 - `ci_table.csv` / `ci_daily.csv` — credible interval tables
-- `forecast.png` / `forecast.csv` — 90-day baseflow forecast
+- `forecast.html` / `forecast.csv` — 90-day baseflow forecast (interactive Plotly)
 
 A `.done` marker file is written per site so the script can be interrupted and resumed safely.
 
@@ -248,18 +251,25 @@ gunicorn -w 4 -b 0.0.0.0:5000 app:app
 
 ### Map View
 
-The map loads all gages as clustered markers. Marker color indicates status:
+The map loads all gages as clustered markers. The default symbolization shows calibration status:
 
 | Color | Meaning |
 |---|---|
 | Green | Calibrated — charts available |
-| Gray | Pending — calibration not yet run |
+| Orange | Pending — calibration not yet run |
 
-Use the **filter panel** (top-right) to show only:
-- Calibrated gages
+Use the **Symbolize by** dropdown in the legend to switch to a continuous color ramp based on:
+- **Forecast RMSE / MAE** — green (low error) → yellow → red (high error)
+- **N Sequences** — light → dark blue (number of forecast windows evaluated)
+- **Drainage Area** — light → dark green (mi²)
+
+Grey markers indicate gages with no data for the selected metric. The legend shows a gradient bar with p5–p95 range labels.
+
+Use the **filter toggles** to show only:
+- Reference-only gages (GAGES-II)
 - Natural-channel gages (NWM classification)
-- GAGES-II reference gages
-- Gages without low-flow periods
+- Low-flow gages
+- Favorited gages
 
 ### Gage Detail Panel
 
@@ -296,7 +306,7 @@ All endpoints return JSON unless noted otherwise.
 
 ### GET `/api/gages`
 
-Returns all gages with coordinates, status, NWM behavior, and low-flow flag.
+Returns all gages with coordinates, status, NWM behavior, low-flow flag, drainage area, and pre-computed forecast skill metrics.
 
 ```json
 [
@@ -308,10 +318,16 @@ Returns all gages with coordinates, status, NWM behavior, and low-flow flag.
     "status": "calibrated",
     "behavior": "Natural",
     "ref_status": "Ref",
-    "has_lowflow": false
+    "has_lowflow": false,
+    "drain_area_sqmi": 714.0,
+    "overall_RMSE": 42381.5,
+    "overall_MAE": 31204.8,
+    "n_sequences": 97
   }
 ]
 ```
+
+Metric fields are `null` for gages not covered by `forecast_skill/output/metrics.csv`.
 
 ### GET `/api/gage/<site_no>/info`
 
@@ -406,6 +422,10 @@ lfa/
 │   ├── NWM_USGS_Natural_Flow.csv
 │   ├── NWM_USGS_Artificial_Path.csv
 │   └── GAGES-II_ref_non_ref.csv
+│
+├── forecast_skill/                 # Forecast skill evaluation
+│   ├── run_forecast_skill.py       # Batch script to compute metrics
+│   └── output/metrics.csv          # Pre-computed per-gage RMSE / MAE / N sequences
 │
 ├── pybfs/                          # PyBFS library
 ├── baseflow/                       # Baseflow separation library
