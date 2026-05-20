@@ -327,7 +327,7 @@ Returns all gages with coordinates, status, NWM behavior, low-flow flag, drainag
 ]
 ```
 
-Metric fields are `null` for gages not covered by `forecast_skill/output/metrics.csv`.
+Metric fields are `null` for gages not covered by `forecast_skill/strict/output/metrics.csv`.
 
 ### GET `/api/gage/<site_no>/info`
 
@@ -424,8 +424,9 @@ lfa/
 │   └── GAGES-II_ref_non_ref.csv
 │
 ├── forecast_skill/                 # Forecast skill evaluation
-│   ├── run_forecast_skill.py       # Batch script to compute metrics
-│   └── output/metrics.csv          # Pre-computed per-gage RMSE / MAE / N sequences
+│   └── strict/
+│       ├── run_forecast_skill.py   # Batch script to compute metrics
+│       └── output/metrics.csv      # Pre-computed per-gage RMSE / MAE / N sequences
 │
 ├── pybfs/                          # PyBFS library
 ├── baseflow/                       # Baseflow separation library

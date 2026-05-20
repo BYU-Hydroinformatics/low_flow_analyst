@@ -2,9 +2,9 @@
 """Run forecast_skill() for all U.S. stream gages with low-flow and save metrics.
 
 Data sources:
-  - Streamflow:  ../../usgs_daily_streamflow/<site_no>.csv
-  - Calibration: ../../usgs_calibration_results/params/params_<site_no>.csv
-  - Gage list:   ../../low_flow_gages.csv
+  - Streamflow:  ../../../usgs_daily_streamflow/<site_no>.csv
+  - Calibration: ../../../usgs_calibration_results/params/params_<site_no>.csv
+  - Gage list:   ../../../low_flow_gages.csv
 """
 
 import os
@@ -15,11 +15,11 @@ import numpy as np
 import pandas as pd
 import pybfs
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from baseflow.skill import forecast_skill
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(SCRIPT_DIR, '..', '..')
+ROOT = os.path.join(SCRIPT_DIR, '..', '..', '..')
 
 STREAMFLOW_DIR = os.path.join(ROOT, 'usgs_daily_streamflow')
 PARAMS_DIR = os.path.join(ROOT, 'usgs_calibration_results', 'params')

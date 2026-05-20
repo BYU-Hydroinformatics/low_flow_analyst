@@ -142,9 +142,9 @@ def load_low_flow_data():
 
 def load_metrics_data():
     """Load pre-computed forecast skill metrics at startup."""
-    path = os.path.join(BASE_DIR, "forecast_skill", "output", "metrics.csv")
+    path = os.path.join(BASE_DIR, "forecast_skill", "strict", "output", "metrics.csv")
     if not os.path.exists(path):
-        print("Warning: forecast_skill/output/metrics.csv not found.")
+        print("Warning: forecast_skill/strict/output/metrics.csv not found.")
         return
     df = pd.read_csv(path, dtype={'site_no': str})
     for _, row in df.iterrows():
