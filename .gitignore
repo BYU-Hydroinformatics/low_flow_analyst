@@ -43,6 +43,9 @@ usgs_daily_streamflow/*.csv
 usgs_bfs_results/
 temp_results/
 
+# BFD Ensemble per-gage voter cache (regenerated on demand)
+bfd_ensemble_cache/
+
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 .AppleDouble

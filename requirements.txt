@@ -8,3 +8,6 @@ numba>=0.56.0
 tqdm>=4.60.0
 plotly>=5.0.0
 pybfs @ git+https://github.com/BYU-Hydroinformatics/pybfs.git
+scikit-learn>=1.3.0
+baseflowx==0.2.1                       # pinned: 0.2.2 changed param_calibrate()'s signature,
+                                        # incompatible with bfd_db's Boughton calibration adapter

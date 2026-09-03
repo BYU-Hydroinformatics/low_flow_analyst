@@ -155,6 +155,34 @@
         .btn-drought { background: linear-gradient(135deg, #ef6c00, #bf360c); color: white; }
         .btn-anomaly { background: linear-gradient(135deg, #5c6bc0, #283593); color: white; }
         .btn-skill { background: linear-gradient(135deg, #00897b, #004d40); color: white; }
+        .btn-bfd { background: linear-gradient(135deg, #8e24aa, #4a148c); color: white; }
+
+        /* BFD Ensemble panel */
+        .bfd-controls {
+            background: #f8f9fa; border-radius: 10px; padding: 14px; margin-bottom: 16px;
+        }
+        .bfd-param-row {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;
+        }
+        .bfd-param:last-child { margin-bottom: 0; }
+        .bfd-param-label {
+            display: flex; justify-content: space-between; font-size: 11px; color: #666;
+            margin-bottom: 4px;
+        }
+        .bfd-param-label .bfd-param-value { font-weight: 700; color: #4a148c; }
+        .bfd-param input[type="range"] { width: 100%; accent-color: #8e24aa; }
+        .bfd-voters-row {
+            display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px;
+        }
+        .bfd-voter-chip {
+            font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px;
+            background: #f3e5f5; color: #6a1b9a; border: 1px solid #e1bee7;
+        }
+        .bfd-note {
+            background: #f3e5f5; border-left: 4px solid #8e24aa;
+            border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
+            font-size: 12px; color: #4a148c; line-height: 1.5;
+        }
 
         /* Skill assessment */
         .skill-metrics-grid {
@@ -174,6 +202,22 @@
         .skill-no-seqs {
             background: #f8f9fa; padding: 12px; border-radius: 8px;
             font-size: 13px; color: #666; margin-bottom: 16px;
+        }
+        .skill-model-toggle {
+            display: flex; gap: 0; margin-bottom: 16px; border-radius: 8px;
+            overflow: hidden; border: 2px solid #e0e0e0;
+        }
+        .skill-model-btn {
+            flex: 1; padding: 9px 10px; text-align: center;
+            font-size: 12px; font-weight: 600; border: none; cursor: pointer;
+            background: #f5f5f5; color: #666; transition: all 0.2s;
+        }
+        .skill-model-btn.active { background: #00897b; color: white; }
+        .skill-model-btn:hover:not(.active) { background: #e8e8e8; }
+        .skill-bfd-note {
+            background: #e8f5e9; border-left: 4px solid #00897b;
+            border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
+            font-size: 12px; color: #2e7d32; line-height: 1.5;
         }
 
         /* Anomaly cards */
@@ -950,6 +994,12 @@
                 <button class="action-btn btn-drought" style="width:100%;margin-bottom:16px" onclick="loadDrought('${siteNo}')">Load Drought Conditions</button>
             </div>`;
 
+            // BFD Ensemble section (any gage with a streamflow record; PyBFS
+            // just drops out of the vote if the gage isn't calibrated)
+            html += `<div id="bfd-ensemble-container">
+                <button class="action-btn btn-bfd" style="width:100%;margin-bottom:16px" onclick="loadBfdEnsemble('${siteNo}')">Explore BFD Ensemble</button>
+            </div>`;
+
             // Anomaly section (for calibrated gages)
             if (info.status === 'calibrated') {
                 html += `<div id="anomaly-container">
@@ -1360,46 +1410,165 @@
             container.innerHTML = html;
         }
 
-        // ===== Skill Assessment =====
-        async function loadSkill(siteNo) {
-            const container = document.getElementById('skill-container');
-            container.innerHTML = '<div class="loading"><span class="spinner"></span> Running skill assessment...</div>';
+        // ===== BFD Ensemble =====
+        // Per-gage tunable parameters (bf_ratio_threshold = "X% threshold").
+        let bfdParams = { bf_ratio_threshold: 0.95, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+        let bfdUpdateTimer = null;
 
-            let data;
+        async function loadBfdEnsemble(siteNo) {
+            const container = document.getElementById('bfd-ensemble-container');
+            bfdParams = { bf_ratio_threshold: 0.95, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+            container.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD ensemble (first load per gage caches the voters)...</div>';
+            await fetchAndRenderBfdEnsemble(siteNo);
+        }
+
+        async function fetchAndRenderBfdEnsemble(siteNo) {
+            const container = document.getElementById('bfd-ensemble-container');
+            const qs = new URLSearchParams(bfdParams).toString();
             try {
-                const resp = await fetch(`/api/gage/${siteNo}/skill`);
-                data = await resp.json();
+                const resp = await fetch(`/api/gage/${siteNo}/bfd_ensemble?${qs}`);
+                const data = await resp.json();
+                if (data.error) {
+                    container.innerHTML = `<div class="error-msg">${data.error}</div>`;
+                    return;
+                }
+                renderBfdEnsemble(siteNo, data);
             } catch (e) {
-                container.innerHTML = `<div class="error-msg">Failed to load skill assessment: ${e.message}</div>`;
-                return;
+                container.innerHTML = `<div class="error-msg">Failed to load BFD ensemble: ${e.message}</div>`;
             }
-            if (data.error) {
-                container.innerHTML = `<div class="error-msg">${data.error}</div>`;
-                return;
+        }
+
+        function bfdParamChanged(siteNo, key, value, displayId, displayFmt) {
+            bfdParams[key] = value;
+            document.getElementById(displayId).textContent = displayFmt(value);
+            clearTimeout(bfdUpdateTimer);
+            bfdUpdateTimer = setTimeout(() => fetchAndRenderBfdEnsemble(siteNo), 250);
+        }
+
+        function renderBfdEnsemble(siteNo, data) {
+            const container = document.getElementById('bfd-ensemble-container');
+            const pct = (v) => Math.round(v * 100) + '%';
+            const voterChips = data.voters.map(v => `<span class="bfd-voter-chip">${data.voter_labels[v]}</span>`).join('');
+            const missingPybfs = !data.voters.includes('pybfs');
+
+            let html = `<button class="action-btn btn-bfd" style="width:100%;margin-bottom:16px" onclick="loadBfdEnsemble('${siteNo}')">&#8635; Recompute BFD Ensemble</button>`;
+
+            html += `<div class="bfd-note">Ensemble vote across ${data.voters.length} independent methods. Hover any point on the hydrograph to see how each voter classified that day.${missingPybfs ? ' PyBFS is not calibrated for this gage, so it sits out of the vote.' : ''}</div>`;
+
+            html += `<div class="bfd-voters-row">${voterChips}</div>`;
+
+            html += `<div class="bfd-controls">
+                <div class="bfd-param-row">
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>X% Threshold</span><span class="bfd-param-value" id="bfd-val-threshold">${pct(bfdParams.bf_ratio_threshold)}</span></div>
+                        <input type="range" min="0.5" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold}"
+                            oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold', parseFloat(this.value), 'bfd-val-threshold', v => Math.round(v*100)+'%')">
+                    </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>Voting Fraction</span><span class="bfd-param-value" id="bfd-val-voting">${pct(bfdParams.voting_fraction)}</span></div>
+                        <input type="range" min="0" max="1" step="0.01" value="${bfdParams.voting_fraction}"
+                            oninput="bfdParamChanged('${siteNo}', 'voting_fraction', parseFloat(this.value), 'bfd-val-voting', v => Math.round(v*100)+'%')">
+                    </div>
+                </div>
+                <div class="bfd-param-row" style="margin-bottom:0">
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>t<sub>c</sub> (gap tolerance)</span><span class="bfd-param-value" id="bfd-val-tc">${bfdParams.t_c} days</span></div>
+                        <input type="range" min="0" max="10" step="1" value="${bfdParams.t_c}"
+                            oninput="bfdParamChanged('${siteNo}', 't_c', parseInt(this.value), 'bfd-val-tc', v => v+' days')">
+                    </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>d<sub>min</sub> (min duration)</span><span class="bfd-param-value" id="bfd-val-dmin">${bfdParams.d_min} days</span></div>
+                        <input type="range" min="1" max="30" step="1" value="${bfdParams.d_min}"
+                            oninput="bfdParamChanged('${siteNo}', 'd_min', parseInt(this.value), 'bfd-val-dmin', v => v+' days')">
+                    </div>
+                </div>
+            </div>`;
+
+            html += '<div class="skill-metrics-grid">';
+            html += `
+                <div class="skill-metric-card" style="border-left-color:#8e24aa">
+                    <div class="skill-metric-label">BFD Days</div>
+                    <div class="skill-metric-value">${(data.stats.bfd_fraction * 100).toFixed(1)}%</div>
+                    <div class="skill-metric-sub">of ${data.stats.n_days.toLocaleString()} days on record</div>
+                </div>
+                <div class="skill-metric-card" style="border-left-color:#8e24aa">
+                    <div class="skill-metric-label">Pooled Events</div>
+                    <div class="skill-metric-value">${data.stats.n_events}</div>
+                    <div class="skill-metric-sub">${data.stats.mean_event_duration !== null ? 'mean duration ' + data.stats.mean_event_duration + ' days' : 'none found'}</div>
+                </div>
+            `;
+            html += '</div>';
+
+            if (data.total_points > data.dates.length) {
+                html += `<div style="font-size:11px;color:#999;margin-bottom:8px">Showing ${data.dates.length.toLocaleString()} of ${data.total_points.toLocaleString()} days (downsampled for display; stats above use the full record).</div>`;
             }
 
-            forecastModalData = data;  // store for modal re-open
+            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Hover a point to see each voter’s call')}
+                     <div class="plot-div" id="plot-bfd"></div>`;
+
+            container.innerHTML = html;
+            setTimeout(() => renderBfdChart(data), 0);
+        }
+
+        function renderBfdChart(data) {
+            const customdata = data.dates.map((d, i) => {
+                const parts = data.voters.map(v => `${data.voter_labels[v]} ${data.labels[v][i] ? '✓' : '✗'}`);
+                const nVote = data.voters.reduce((s, v) => s + data.labels[v][i], 0);
+                parts.push(`<b>${nVote}/${data.voters.length} voted BFD → Ensemble: ${data.ensemble[i] ? 'BFD' : 'not BFD'}</b>`);
+                return parts.join('<br>');
+            });
+
+            const qTrace = {
+                x: data.dates, y: data.q, mode: 'lines',
+                line: { color: '#1a73e8', width: 0.9 },
+                name: 'Streamflow',
+                customdata: customdata,
+                hovertemplate: '%{x}<br>Q: %{y:.2f} cfs<br>%{customdata}<extra></extra>',
+            };
+
+            const eventShapes = data.events.map(ev => ({
+                type: 'rect', xref: 'x', x0: ev.start_date, x1: ev.end_date,
+                yref: 'paper', y0: 0, y1: 1,
+                fillcolor: 'rgba(142,36,170,0.12)', line: { width: 0 },
+            }));
+
+            renderChart('plot-bfd', [qTrace], {
+                margin: { l: 60, r: 20, t: 10, b: 50 },
+                xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
+                yaxis: { title: { text: 'Streamflow (cfs)', font: { size: 11 } }, type: 'log' },
+                shapes: eventShapes,
+                hovermode: 'closest',
+                plot_bgcolor: '#fff', paper_bgcolor: '#fff',
+                font: { family: 'Inter,sans-serif', size: 11 },
+            });
+        }
+
+        // ===== Skill Assessment =====
+        let skillStrictData = null;  // cached strict skill data for toggle
+
+        function renderStrictSkill(siteNo, data) {
             const sep = data.separation;
             const fc = data.forecast;
-
             const fmtVal = (v, digits=4) => v !== null && v !== undefined ? v.toFixed(digits) : 'N/A';
             const fmtPct = (v) => v !== null && v !== undefined ? (v * 100).toFixed(1) + '%' : 'N/A';
 
             let html = '';
-
-            // Metric cards
             html += '<div class="skill-metrics-grid">';
+            if (sep) {
+                html += `
+                    <div class="skill-metric-card">
+                        <div class="skill-metric-label">Separation RMSE</div>
+                        <div class="skill-metric-value">${fmtVal(sep.rmse)} m³/s</div>
+                        <div class="skill-metric-sub">${sep.n_days} baseflow days (${fmtPct(sep.frac_strict)} of record)</div>
+                    </div>
+                    <div class="skill-metric-card">
+                        <div class="skill-metric-label">Separation MAE</div>
+                        <div class="skill-metric-value">${fmtVal(sep.mae)} m³/s</div>
+                        <div class="skill-metric-sub">PyBFS vs strict-baseflow reference</div>
+                    </div>
+                `;
+            }
             html += `
-                <div class="skill-metric-card">
-                    <div class="skill-metric-label">Separation RMSE</div>
-                    <div class="skill-metric-value">${fmtVal(sep.rmse)} m³/s</div>
-                    <div class="skill-metric-sub">${sep.n_days} baseflow days (${fmtPct(sep.frac_strict)} of record)</div>
-                </div>
-                <div class="skill-metric-card">
-                    <div class="skill-metric-label">Separation MAE</div>
-                    <div class="skill-metric-value">${fmtVal(sep.mae)} m³/s</div>
-                    <div class="skill-metric-sub">PyBFS vs strict-baseflow reference</div>
-                </div>
                 <div class="skill-metric-card forecast">
                     <div class="skill-metric-label">Forecast RMSE</div>
                     <div class="skill-metric-value">${fmtVal(fc.overall_rmse)} m³/s</div>
@@ -1413,12 +1582,12 @@
             `;
             html += '</div>';
 
-            // Separation residuals plot
-            html += '<div class="skill-section-title">Separation Residuals (Baseflow-Dominated Days)</div>';
-            html += `${plotHeader('Q \u2212 BF\u2099\u1d0f\u02e2 on Strict-Baseflow Days', 'plot-skill-sep', 'Scroll to zoom, drag to pan')}
-                     <div class="plot-div" id="plot-skill-sep"></div>`;
+            if (sep) {
+                html += '<div class="skill-section-title">Separation Residuals (Baseflow-Dominated Days)</div>';
+                html += `${plotHeader('Q \u2212 BF\u2099\u1d0f\u02e2 on Strict-Baseflow Days', 'plot-skill-sep', 'Scroll to zoom, drag to pan')}
+                         <div class="plot-div" id="plot-skill-sep"></div>`;
+            }
 
-            // Forecast sequences plot
             if (fc.n_sequences > 0) {
                 html += '<div class="skill-section-title">Forecast Skill by Sequence</div>';
                 html += `<button class="action-btn btn-skill" style="width:100%;margin-bottom:10px;font-size:12px;padding:8px"
@@ -1428,33 +1597,33 @@
                 html += `${plotHeader('Per-Sequence RMSE & MAE', 'plot-skill-fc', '')}
                          <div class="plot-div" id="plot-skill-fc"></div>`;
             } else {
-                html += '<div class="skill-no-seqs">No qualifying baseflow sequences found for forecast skill evaluation (need ≥ 30 consecutive baseflow-dominated days).</div>';
+                html += '<div class="skill-no-seqs">No qualifying baseflow sequences found for forecast skill evaluation (need \u2265 30 consecutive baseflow-dominated days).</div>';
             }
 
-            container.innerHTML = html;
+            document.getElementById('skill-view-body').innerHTML = html;
 
             setTimeout(() => {
-                // Separation residuals scatter
-                const strictIdx = sep.strict_mask.map((v, i) => v ? i : -1).filter(i => i >= 0);
-                const resDates = strictIdx.map(i => sep.dates[i]);
-                const resVals = strictIdx.map(i => sep.residuals[i]);
+                if (sep) {
+                    const strictIdx = sep.strict_mask.map((v, i) => v ? i : -1).filter(i => i >= 0);
+                    const resDates = strictIdx.map(i => sep.dates[i]);
+                    const resVals = strictIdx.map(i => sep.residuals[i]);
 
-                const zeroLine = { x: [sep.dates[0], sep.dates[sep.dates.length - 1]], y: [0, 0],
-                    mode: 'lines', line: { color: '#999', width: 1, dash: 'dot' }, showlegend: false, hoverinfo: 'skip' };
-                const resSeries = { x: resDates, y: resVals, mode: 'markers',
-                    marker: { color: '#00897b', size: 4, opacity: 0.7 },
-                    name: 'Residual (Q \u2212 BF)', hovertemplate: '%{x}<br>%{y:.4f} m³/s<extra></extra>' };
+                    const zeroLine = { x: [sep.dates[0], sep.dates[sep.dates.length - 1]], y: [0, 0],
+                        mode: 'lines', line: { color: '#999', width: 1, dash: 'dot' }, showlegend: false, hoverinfo: 'skip' };
+                    const resSeries = { x: resDates, y: resVals, mode: 'markers',
+                        marker: { color: '#00897b', size: 4, opacity: 0.7 },
+                        name: 'Residual (Q − BF)', hovertemplate: '%{x}<br>%{y:.4f} m³/s<extra></extra>' };
 
-                renderChart('plot-skill-sep', [zeroLine, resSeries], {
-                    margin: { l: 60, r: 20, t: 10, b: 50 },
-                    xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
-                    yaxis: { title: { text: 'Residual (m³/s)', font: { size: 11 } }, zeroline: false },
-                    legend: { orientation: 'h', y: 1.08 },
-                    plot_bgcolor: '#fff', paper_bgcolor: '#fff',
-                    font: { family: 'Inter,sans-serif', size: 11 },
-                });
+                    renderChart('plot-skill-sep', [zeroLine, resSeries], {
+                        margin: { l: 60, r: 20, t: 10, b: 50 },
+                        xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
+                        yaxis: { title: { text: 'Residual (m³/s)', font: { size: 11 } }, zeroline: false },
+                        legend: { orientation: 'h', y: 1.08 },
+                        plot_bgcolor: '#fff', paper_bgcolor: '#fff',
+                        font: { family: 'Inter,sans-serif', size: 11 },
+                    });
+                }
 
-                // Per-sequence RMSE/MAE bar chart
                 if (fc.n_sequences > 0) {
                     const seqLabels = fc.summary.map(s => `Seq ${s.seq} (${s.len}d)`);
                     const rmseVals = fc.summary.map(s => s.rmse);
@@ -1479,11 +1648,72 @@
                     });
                 }
 
-                // Auto-open forecast modal zoomed to the first sequence
                 if (fc.n_sequences > 0) {
                     openForecastModal(data, 0);
                 }
             }, 50);
+        }
+
+        async function switchSkillModel(siteNo, model) {
+            const btns = document.querySelectorAll('.skill-model-btn');
+            btns.forEach(b => b.classList.toggle('active', b.dataset.model === model));
+
+            if (model === 'strict') {
+                if (skillStrictData) renderStrictSkill(siteNo, skillStrictData);
+                return;
+            }
+
+            // BFD-ML view: fetch full per-sequence skill data
+            const body = document.getElementById('skill-view-body');
+            body.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD-ML skill assessment...</div>';
+            let data;
+            try {
+                const resp = await fetch(`/api/gage/${siteNo}/bfd_ml_skill`);
+                data = await resp.json();
+            } catch (e) {
+                body.innerHTML = `<div class="error-msg">Failed to load BFD-ML skill: ${e.message}</div>`;
+                return;
+            }
+            if (data.error) {
+                body.innerHTML = `<div class="error-msg">${data.error}</div>`;
+                return;
+            }
+
+            forecastModalData = data;
+            renderStrictSkill(siteNo, data);
+        }
+
+        async function loadSkill(siteNo) {
+            const container = document.getElementById('skill-container');
+            container.innerHTML = '<div class="loading"><span class="spinner"></span> Running skill assessment...</div>';
+
+            let data;
+            try {
+                const resp = await fetch(`/api/gage/${siteNo}/skill`);
+                data = await resp.json();
+            } catch (e) {
+                container.innerHTML = `<div class="error-msg">Failed to load skill assessment: ${e.message}</div>`;
+                return;
+            }
+            if (data.error) {
+                container.innerHTML = `<div class="error-msg">${data.error}</div>`;
+                return;
+            }
+
+            forecastModalData = data;
+            skillStrictData = data;
+
+            container.innerHTML = `
+                <div class="skill-model-toggle">
+                    <button class="skill-model-btn active" data-model="strict"
+                        onclick="switchSkillModel('${siteNo}', 'strict')">BFS Strict</button>
+                    <button class="skill-model-btn" data-model="bfd_ml"
+                        onclick="switchSkillModel('${siteNo}', 'bfd_ml')">BFD-ML</button>
+                </div>
+                <div id="skill-view-body"></div>
+            `;
+
+            renderStrictSkill(siteNo, data);
         }
 
         // ===== Processing (original data) =====
@@ -1894,7 +2124,8 @@
 
             const traces = [];
 
-            const qMax = Math.max(...fc.q.filter(v => v !== null && !isNaN(v))) * 1.5 || 1;
+            const qObs = Math.max(...fc.q.filter(v => v !== null && !isNaN(v))) || 1;
+            const qMax = qObs * 1.1;
 
             // Clickable filled region per sequence (traces 1..N → curveNumber maps to seqIdx)
             fc.summary.forEach((s, i) => {
@@ -1919,6 +2150,12 @@
                 line: { color: '#37474F', width: 0.9 },
                 hovertemplate: '%{x}: %{y:.3f} m³/s<extra>Q</extra>',
             });
+            traces.push({
+                x: fc.dates, y: fc.fc, name: 'Model Prediction', mode: 'lines',
+                line: { color: '#5c6bc0', width: 1, dash: 'dash' },
+                connectgaps: false,
+                hovertemplate: '%{x}: %{y:.3f} m³/s<extra>Model</extra>',
+            });
 
             const annotations = fc.summary.map((s, i) => ({
                 x: s.start_date, y: 1, yref: 'paper',
@@ -1935,7 +2172,7 @@
                 hovermode: 'closest',
                 showlegend: false,
                 xaxis: { gridcolor: '#eee', zeroline: false },
-                yaxis: { gridcolor: '#eee', zeroline: false, rangemode: 'tozero',
+                yaxis: { gridcolor: '#eee', zeroline: false, range: [0, qMax],
                          title: { text: 'Q (m³/s)', font: { size: 10 } } },
                 annotations,
             }, { ...plotlyConfig, responsive: false });
@@ -1956,13 +2193,22 @@
 
         // Bottom-left: zoomed to active sequence ± context
         function renderHydPanel(seqIdx) {
-            const { seq, dates: seqDates, q: seqQ } = fcSeqData(seqIdx);
+            const { seq, dates: seqDates, q: seqQ, fc: seqFcVals } = fcSeqData(seqIdx);
             const [ctxStart, ctxEnd] = fcContextRange(seqIdx);
             const { detailH } = fcHeights();
+
+            // Y-axis max: 40% above the max value visible in the context window
+            const allDates = forecastModalData.forecast.dates;
+            const allQ = forecastModalData.forecast.q;
+            const inContext = allQ.filter((v, i) => v !== null && !isNaN(v) && allDates[i] >= ctxStart && allDates[i] <= ctxEnd);
+            const fcInContext = seqFcVals.filter(v => v !== null && !isNaN(v));
+            const ctxMax = (Math.max(...inContext, ...fcInContext, 0) || 1) * 1.4;
 
             const traces = [
                 { x: forecastModalData.forecast.dates, y: forecastModalData.forecast.q,
                   name: 'Observed Q', mode: 'lines', line: { color: '#546E7A', width: 1 } },
+                { x: seqDates, y: seqFcVals, name: 'Model Prediction', mode: 'lines',
+                  line: { color: '#5c6bc0', width: 2, dash: 'dash' } },
                 { x: seqDates, y: seqQ, name: 'Active sequence', mode: 'lines',
                   line: { color: '#2196F3', width: 2.5 } },
             ];
@@ -1974,7 +2220,7 @@
                 legend: { orientation: 'h', y: 1.06, font: { size: 10 } },
                 xaxis: { gridcolor: '#e8e8e8', zeroline: false, range: [ctxStart, ctxEnd],
                          title: { text: 'Date', font: { size: 10 } } },
-                yaxis: { gridcolor: '#e8e8e8', zeroline: false, rangemode: 'tozero',
+                yaxis: { gridcolor: '#e8e8e8', zeroline: false, range: [0, ctxMax],
                          title: { text: 'Flow (m³/s)', font: { size: 10 } } },
                 shapes: [{ type: 'rect', x0: seq.start_date, x1: seq.end_date,
                     y0: 0, y1: 1, yref: 'paper',
