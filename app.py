@@ -54,7 +54,10 @@ SQMI_TO_M2 = 2_589_988.11
 # ----- BFD-ML model (lazy-loaded on first use) -----
 _bfd_model = None
 _bfd_scaler = None
-BFD_MODEL_DIR = '/Users/amin/Downloads/research/projects/bfd_ciroh/ml_model'
+BFD_MODEL_DIR = os.environ.get(
+    'BFD_MODEL_DIR',
+    '/Users/amin/Downloads/research/projects/bfd_ciroh/ml_model',
+)
 BFD_FEATURES = [
     'streamflow/Mean', 'Mean_streamflow', 'MW5_d2streamflowabs',
     'MW5_streamflow', 'MW5_dstreamflowabs', 'r10m', 'streamflow',
@@ -66,6 +69,12 @@ def _load_bfd_model():
     global _bfd_model, _bfd_scaler
     if _bfd_model is None:
         import joblib
+        if not os.path.isdir(BFD_MODEL_DIR):
+            raise FileNotFoundError(
+                f"BFD-ML model files not found at {BFD_MODEL_DIR}. "
+                "Set the BFD_MODEL_DIR environment variable to the directory holding "
+                "random_forest_bfd_model.joblib and feature_scaler.joblib."
+            )
         _bfd_model = joblib.load(os.path.join(BFD_MODEL_DIR, 'random_forest_bfd_model.joblib'))
         _bfd_scaler = joblib.load(os.path.join(BFD_MODEL_DIR, 'feature_scaler.joblib'))
     return _bfd_model, _bfd_scaler
@@ -1573,6 +1582,7 @@ def api_bfd_ml_metrics(site_no):
 
 
 # ----- Startup -----
+os.makedirs(TEMP_DIR, exist_ok=True)
 load_site_info_data()
 load_nwm_data()
 load_low_flow_data()
@@ -1580,5 +1590,4 @@ load_metrics_data()
 load_bfd_ml_metrics_data()
 
 if __name__ == '__main__':
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    app.run(debug=True, port=5000, threaded=True)
+    app.run(debug=True, port=int(os.environ.get('PORT', 5000)), threaded=True)

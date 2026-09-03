@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: low-flow-analyst
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: standard          # 2 GB RAM; the scientific stack + 9,500 gages needs more than 512 MB
+    region: oregon
+    branch: main
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # Optional: directory holding random_forest_bfd_model.joblib and
+      # feature_scaler.joblib. Leave unset to disable the BFD-ML routes.
+      # - key: BFD_MODEL_DIR
+      #   value: /app/ml_model

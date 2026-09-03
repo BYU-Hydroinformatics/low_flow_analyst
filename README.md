@@ -36,6 +36,7 @@ Then open **http://127.0.0.1:5000** in your browser. The app ships with pre-cali
 - [API Reference](#api-reference)
 - [Directory Structure](#directory-structure)
 - [Configuration](#configuration)
+- [Deploying to Render](#deploying-to-render)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -238,12 +239,15 @@ python app.py
 
 Open [http://localhost:5000](http://localhost:5000) in your browser. The app starts by loading all gage metadata, NWM behavior data, and low-flow classifications into memory.
 
-For production deployments, serve with Gunicorn:
+For production deployments, serve with Gunicorn. Use a single worker with threads —
+calibration and update jobs run in background threads and keep their progress in
+process memory, so a second worker would not see them:
 
 ```bash
-pip install gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
+gunicorn --workers 1 --threads 8 --timeout 300 -b 0.0.0.0:5000 app:app
 ```
+
+To run the app as a public web service, see [Deploying to Render](#deploying-to-render).
 
 ---
 
@@ -473,6 +477,66 @@ Key constants at the top of `app.py`:
 | `SQMI_TO_M2` | 2 589 988.11 | Unit conversion factor (mi² → m²) |
 
 Directory paths (`STREAMFLOW_DIR`, `CALIB_DIR`, `RESULTS_DIR`, `TEMP_DIR`) are derived from the location of `app.py` and can be adjusted at the top of the file if you keep data in a different location.
+
+---
+
+## Deploying to Render
+
+LFA is deployed the same way as [Baseflow Explorer](https://baseflow-explorer.onrender.com/):
+a Docker web service on [Render](https://render.com) that builds straight from the GitHub
+repository. The two files that make this work are `Dockerfile` and `render.yaml` at the
+repository root.
+
+### One-time setup
+
+1. Push `Dockerfile`, `.dockerignore`, and `render.yaml` to `main`.
+2. In the Render dashboard choose **New → Blueprint**, point it at
+   `BYU-Hydroinformatics/low_flow_analyst`, and approve the plan it reads from
+   `render.yaml`. (To skip the blueprint, choose **New → Web Service**, select the repo,
+   set the runtime to **Docker**, and leave the Dockerfile path at `./Dockerfile`.)
+3. Render assigns a URL of the form `https://low-flow-analyst.onrender.com`.
+
+Every push to `main` triggers a rebuild (`autoDeploy: true`). The first build takes
+roughly ten minutes — numba, scipy, statsmodels, and scikit-learn all compile or pull
+large wheels.
+
+### Instance size
+
+`render.yaml` requests the **Standard** plan (2 GB RAM). The scientific stack plus
+metadata for 9,540 gages does not fit reliably in the 512 MB that the Free and Starter
+plans provide, and Render kills a service that exceeds its memory limit mid-request.
+The Free plan also spins the service down after 15 minutes of inactivity, which means a
+cold start of about a minute on the next visit.
+
+### What works on the deployed instance
+
+The repository tracks calibration parameters for every gage but only ten example
+streamflow CSVs (see `.gitignore`). On a fresh container:
+
+- The map, gage metadata, low-flow filter, and forecast-skill metrics work for all gages.
+- Charts render immediately for the ten example gages.
+- For any other calibrated gage, **Update** fetches current daily values from USGS into
+  the container's scratch directory and runs BFS against the stored parameters.
+
+Anything written at runtime — `temp_results/`, `usgs_bfs_results/`, newly fetched
+streamflow, and parameters produced by **Recalibrate** — lives on the container's
+ephemeral disk and disappears on the next deploy or restart. Attach a Render persistent
+disk mounted at `/app/temp_results` if you need that work to survive.
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `PORT` | Set by Render; the container binds to it. Defaults to 8080 locally. |
+| `BFD_MODEL_DIR` | Directory holding `random_forest_bfd_model.joblib` and `feature_scaler.joblib`. The BFD-ML routes return a clear error when it is unset or missing, and the rest of the app is unaffected. |
+| `MPLBACKEND` | Set to `Agg` in the Dockerfile so matplotlib never looks for a display. |
+
+### Building the image locally
+
+```bash
+docker build -t low-flow-analyst .
+docker run -p 8080:8080 low-flow-analyst
+```
 
 ---
 

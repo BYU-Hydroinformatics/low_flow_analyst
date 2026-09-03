@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.claude
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.pytest_cache/
+experiments/
+usgs_bfs_results/
+temp_results/
+bfd_ensemble_cache/
+*.md
+!README.md
