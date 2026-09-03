@@ -761,22 +761,33 @@
         }
 
         // ===== Load Gages =====
-        function showLoadError(msg) {
+        function showLoadStatus(msg, isError) {
             let el = document.getElementById('load-error');
             if (!el) {
                 el = document.createElement('div');
                 el.id = 'load-error';
                 el.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);' +
-                    'z-index:1200;background:#b3261e;color:#fff;padding:10px 16px;border-radius:6px;' +
+                    'z-index:1200;color:#fff;padding:10px 16px;border-radius:6px;' +
                     'font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:80%';
                 document.body.appendChild(el);
             }
+            el.style.background = isError ? '#b3261e' : '#37474f';
             el.textContent = msg;
         }
+
+        function clearLoadStatus() {
+            document.getElementById('load-error')?.remove();
+        }
+
+        function showLoadError(msg) { showLoadStatus(msg, true); }
 
         async function loadGages(attempt = 1) {
             // A free-tier instance cold-starts, so the first fetch after an idle
             // period can fail. Retry, and say so rather than leaving a blank map.
+            // Serializing 9,500+ gages takes ~10s on a small instance, and longer
+            // when it has to wake from a spin-down. Say so, or the empty map for
+            // those seconds reads as "there are no gages".
+            showLoadStatus(attempt === 1 ? 'Loading gages…' : `Waking up the server… retrying (${attempt - 1}/3)`, false);
             let resp;
             try {
                 resp = await fetch('/api/gages');
@@ -784,15 +795,12 @@
                 allGages = await resp.json();
             } catch (err) {
                 if (attempt < 4) {
-                    showLoadError(`Waking up the server… retrying (${attempt}/3)`);
                     await new Promise(r => setTimeout(r, 4000 * attempt));
                     return loadGages(attempt + 1);
                 }
                 showLoadError(`Could not load gages: ${err.message}. Reload to try again.`);
                 throw err;
             }
-            const errEl = document.getElementById('load-error');
-            if (errEl) errEl.remove();
             computeMetricRanges();
             allMarkers = [];
             for (const gage of allGages) {
@@ -810,6 +818,7 @@
             }
             clusterGroup.addLayers(allMarkers);
             updateLegendDisplay();
+            clearLoadStatus();
         }
 
         function getFilteredMarkers() {
