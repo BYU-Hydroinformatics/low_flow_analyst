@@ -652,12 +652,15 @@
             const hydroRef = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}', {
                 attribution: '&copy; Esri', maxZoom: 18, opacity: 1,
             });
-            // Light plain base for a clean rivers-only look
-            const cartoLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; CARTO &copy; OpenStreetMap', maxZoom: 19,
+            // Light plain base for a clean rivers-only look.
+            // Esri's light gray canvas, not CARTO: unauthenticated CARTO basemap
+            // requests now return tiles watermarked "API KEY REQUIRED" as a 200,
+            // so the failure is invisible to both the console and the network tab.
+            const lightBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; Esri', maxZoom: 16,
             });
             // Combine: plain light base + hydro overlay = rivers stand out
-            const riversClean = L.layerGroup([cartoLight, hydroRef]);
+            const riversClean = L.layerGroup([lightBase, hydroRef]);
 
             const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
                 attribution: '&copy; Esri', maxZoom: 18,
@@ -756,9 +759,38 @@
         }
 
         // ===== Load Gages =====
-        async function loadGages() {
-            const resp = await fetch('/api/gages');
-            allGages = await resp.json();
+        function showLoadError(msg) {
+            let el = document.getElementById('load-error');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'load-error';
+                el.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);' +
+                    'z-index:1200;background:#b3261e;color:#fff;padding:10px 16px;border-radius:6px;' +
+                    'font:14px/1.4 system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3);max-width:80%';
+                document.body.appendChild(el);
+            }
+            el.textContent = msg;
+        }
+
+        async function loadGages(attempt = 1) {
+            // A free-tier instance cold-starts, so the first fetch after an idle
+            // period can fail. Retry, and say so rather than leaving a blank map.
+            let resp;
+            try {
+                resp = await fetch('/api/gages');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                allGages = await resp.json();
+            } catch (err) {
+                if (attempt < 4) {
+                    showLoadError(`Waking up the server… retrying (${attempt}/3)`);
+                    await new Promise(r => setTimeout(r, 4000 * attempt));
+                    return loadGages(attempt + 1);
+                }
+                showLoadError(`Could not load gages: ${err.message}. Reload to try again.`);
+                throw err;
+            }
+            const errEl = document.getElementById('load-error');
+            if (errEl) errEl.remove();
             computeMetricRanges();
             allMarkers = [];
             for (const gage of allGages) {
