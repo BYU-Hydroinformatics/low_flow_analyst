@@ -18,6 +18,9 @@
         /* Layout */
         #app { display: flex; height: 100vh; }
         #map { flex: 1; height: 100%; z-index: 1; }
+        /* "Rivers Only" draws the hydro overlay straight onto this, with no base
+           tile layer under it, so the land needs a color here. */
+        .leaflet-container { background: #f7f7f5; }
         #panel {
             width: 480px;
             height: 100%;
@@ -652,15 +655,14 @@
             const hydroRef = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}', {
                 attribution: '&copy; Esri', maxZoom: 18, opacity: 1,
             });
-            // Light plain base for a clean rivers-only look.
-            // Esri's light gray canvas, not CARTO: unauthenticated CARTO basemap
-            // requests now return tiles watermarked "API KEY REQUIRED" as a 200,
-            // so the failure is invisible to both the console and the network tab.
-            const lightBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '&copy; Esri', maxZoom: 16,
-            });
-            // Combine: plain light base + hydro overlay = rivers stand out
-            const riversClean = L.layerGroup([lightBase, hydroRef]);
+            // The hydro overlay alone, over the page background, is the rivers-only
+            // view. This used to be CARTO's light_nolabels underneath, but
+            // unauthenticated CARTO basemap requests now return tiles with
+            // "API KEY REQUIRED" painted into the image and a 200 status, so the
+            // failure showed up in neither the console nor the network tab.
+            // Esri's light gray canvas replaced it briefly but carries its own
+            // labels, which double up against the overlay's.
+            const riversClean = L.layerGroup([hydroRef]);
 
             const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
                 attribution: '&copy; Esri', maxZoom: 18,
