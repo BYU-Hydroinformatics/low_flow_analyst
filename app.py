@@ -32,7 +32,16 @@ from baseflow.skill import separation_skill, forecast_skill
 from calibrate_all_gages import calibrate_site, load_drainage_areas
 from run_bfs_all_gages import process_site, load_site_params, load_streamflow
 
-import bfd_ensemble
+# bfd_ensemble needs the external bfd_db package (see BFD_DB_SRC in
+# bfd_ensemble.py), which is not part of this repo. Where it is absent the app
+# serves everything except the BFD ensemble panel.
+try:
+    import bfd_ensemble
+    BFD_ENSEMBLE_ERROR = None
+except ImportError as e:
+    bfd_ensemble = None
+    BFD_ENSEMBLE_ERROR = str(e)
+    print(f"Warning: BFD ensemble unavailable ({e}). Other features are unaffected.")
 
 # Disable SSL verification for USGS API
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -1244,6 +1253,12 @@ def api_bfd_ensemble(site_no):
     PyBFS-calibrated ones — PyBFS simply drops out of the vote when the gage
     has no calibrated parameters (RF-BFD and the baseflowx filters need none).
     """
+    if bfd_ensemble is None:
+        return jsonify({
+            'error': 'BFD ensemble is not available in this deployment: '
+                     f'{BFD_ENSEMBLE_ERROR}. It requires the bfd_db package '
+                     '(set BFD_DB_SRC to its src directory).'
+        }), 503
     if site_no not in site_info:
         return jsonify({'error': 'Gage not found'}), 404
 

@@ -20,7 +20,10 @@ import os
 import numpy as np
 import pandas as pd
 
-BFD_DB_SRC = "/Users/amin/Downloads/research/projects/us_baseflow_db/src"
+BFD_DB_SRC = os.environ.get(
+    "BFD_DB_SRC",
+    "/Users/amin/Downloads/research/projects/us_baseflow_db/src",
+)
 
 import sys
 if BFD_DB_SRC not in sys.path:
