@@ -502,11 +502,15 @@ large wheels.
 
 ### Instance size
 
-`render.yaml` requests the **Standard** plan (2 GB RAM). The scientific stack plus
-metadata for 9,540 gages does not fit reliably in the 512 MB that the Free and Starter
-plans provide, and Render kills a service that exceeds its memory limit mid-request.
-The Free plan also spins the service down after 15 minutes of inactivity, which means a
-cold start of about a minute on the next visit.
+The deployed service runs on Render's **Free** plan: 0.1 CPU and 512 MB RAM. That is the
+tightest constraint on the app. Loading the seven startup CSVs costs about 166 MB with
+pandas alone, and numba, scipy, statsmodels, scikit-learn, matplotlib, and plotly all get
+imported on top of that. If the service dies during startup or gets killed mid-request,
+memory is the first thing to check in the logs — move to Standard (2 GB) from
+**Settings → Compute** if so.
+
+Free instances also spin down after 15 minutes of inactivity, so the first visit after an
+idle period takes about a minute to respond.
 
 ### What works on the deployed instance
 

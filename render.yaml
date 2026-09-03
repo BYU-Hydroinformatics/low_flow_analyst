@@ -3,7 +3,7 @@ services:
     name: low-flow-analyst
     runtime: docker
     dockerfilePath: ./Dockerfile
-    plan: standard          # 2 GB RAM; the scientific stack + 9,500 gages needs more than 512 MB
+    plan: free              # 512 MB. See the memory note in the README's deployment section.
     region: oregon
     branch: main
     healthCheckPath: /
