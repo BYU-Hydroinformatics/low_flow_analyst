@@ -1267,6 +1267,9 @@ def api_bfd_ensemble(site_no):
 
     try:
         bf_ratio_threshold = float(request.args.get('bf_ratio_threshold', 0.95))
+        bf_ratio_threshold_low = float(request.args.get('bf_ratio_threshold_low', 0.75))
+        low_flow_anchor = float(request.args.get('low_flow_anchor', bfd_ensemble.LOW_FLOW_ANCHOR))
+        high_flow_anchor = float(request.args.get('high_flow_anchor', bfd_ensemble.HIGH_FLOW_ANCHOR))
         voting_fraction = float(request.args.get('voting_fraction', 0.5))
         t_c = int(request.args.get('t_c', 3))
         d_min = int(request.args.get('d_min', 7))
@@ -1277,6 +1280,9 @@ def api_bfd_ensemble(site_no):
         result = bfd_ensemble.get_ensemble_result(
             site_no,
             bf_ratio_threshold=bf_ratio_threshold,
+            bf_ratio_threshold_low=bf_ratio_threshold_low,
+            low_flow_anchor=low_flow_anchor,
+            high_flow_anchor=high_flow_anchor,
             voting_fraction=voting_fraction,
             t_c=t_c,
             d_min=d_min,

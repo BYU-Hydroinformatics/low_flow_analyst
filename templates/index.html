@@ -181,6 +181,18 @@
             font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 12px;
             background: #f3e5f5; color: #6a1b9a; border: 1px solid #e1bee7;
         }
+        .bfd-voter-chip .bfd-chip-stat {
+            font-weight: 400; color: #8e6a99; margin-left: 6px;
+        }
+        .bfd-legend {
+            display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+            padding: 8px 12px; font-size: 11px; color: #666;
+            border-top: 1px solid #eee; background: #fff;
+        }
+        .bfd-legend span { display: flex; align-items: center; gap: 6px; }
+        .bfd-legend i {
+            width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+        }
         .bfd-note {
             background: #f3e5f5; border-left: 4px solid #8e24aa;
             border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;
@@ -1455,12 +1467,21 @@
 
         // ===== BFD Ensemble =====
         // Per-gage tunable parameters (bf_ratio_threshold = "X% threshold").
-        let bfdParams = { bf_ratio_threshold: 0.95, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+        let bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+        // Categorical slots 1-5 of the validated palette, pinned per method so a
+        // method keeps its colour whether or not the others are present.
+        const BFD_METHOD_COLORS = {
+            eckhardt: '#2a78d6',
+            chapman: '#eb6834',
+            lyne_hollick: '#1baf7a',
+            boughton: '#eda100',
+            pybfs: '#e87ba4',
+        };
         let bfdUpdateTimer = null;
 
         async function loadBfdEnsemble(siteNo) {
             const container = document.getElementById('bfd-ensemble-container');
-            bfdParams = { bf_ratio_threshold: 0.95, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+            bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7 };
             container.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD ensemble (first load per gage caches the voters)...</div>';
             await fetchAndRenderBfdEnsemble(siteNo);
         }
@@ -1491,27 +1512,56 @@
         function renderBfdEnsemble(siteNo, data) {
             const container = document.getElementById('bfd-ensemble-container');
             const pct = (v) => Math.round(v * 100) + '%';
-            const voterChips = data.voters.map(v => `<span class="bfd-voter-chip">${data.voter_labels[v]}</span>`).join('');
+            // Anchors are percentiles of the flow distribution, so P10 is the
+            // hydrologic Q90 (exceeded 90% of the time). The card below prints
+            // the cfs each one resolves to, which settles the convention.
+            const pctile = (v) => 'P' + Math.round(v * 100);
+            const fmtQ = (v) => v === null || v === undefined ? '?' : (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
+            const voterChips = data.voters.map(v => {
+                const vs = data.voter_stats ? data.voter_stats[v] : null;
+                const stat = vs ? `<span class="bfd-chip-stat">${pct(vs.bfd_fraction)} BFD &middot; ${pct(vs.agreement)} with ensemble</span>` : '';
+                return `<span class="bfd-voter-chip">${data.voter_labels[v]}${stat}</span>`;
+            }).join('');
             const missingPybfs = !data.voters.includes('pybfs');
 
             let html = `<button class="action-btn btn-bfd" style="width:100%;margin-bottom:16px" onclick="loadBfdEnsemble('${siteNo}')">&#8635; Recompute BFD Ensemble</button>`;
 
-            html += `<div class="bfd-note">Ensemble vote across ${data.voters.length} independent methods. Hover any point on the hydrograph to see how each voter classified that day.${missingPybfs ? ' PyBFS is not calibrated for this gage, so it sits out of the vote.' : ''}</div>`;
+            html += `<div class="bfd-note">Ensemble vote across ${data.voters.length} independent methods. The strip under the hydrograph shows every voter's call for every day at a glance &mdash; hover any cell (or any point on the hydrograph) for the detail. Each chip below reports how often that method calls BFD and how often it lands on the same side as the ensemble. The X% threshold is <b>ramped by flow magnitude</b>: it holds at the high-flow value at or above the high anchor and relaxes to the low-flow value at or below the low anchor, log-interpolated between. Both anchors are percentiles of this gage's own flow record (P10 is the hydrologic Q90), because every filter plateaus well short of 95% baseflow exactly where the record is most obviously baseflow-dominant.${missingPybfs ? ' PyBFS is not calibrated for this gage, so it sits out of the vote.' : ''}</div>`;
 
             html += `<div class="bfd-voters-row">${voterChips}</div>`;
 
             html += `<div class="bfd-controls">
                 <div class="bfd-param-row">
                     <div class="bfd-param">
-                        <div class="bfd-param-label"><span>X% Threshold</span><span class="bfd-param-value" id="bfd-val-threshold">${pct(bfdParams.bf_ratio_threshold)}</span></div>
+                        <div class="bfd-param-label"><span>X% Threshold &mdash; high flow</span><span class="bfd-param-value" id="bfd-val-threshold">${pct(bfdParams.bf_ratio_threshold)}</span></div>
                         <input type="range" min="0.5" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold}"
                             oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold', parseFloat(this.value), 'bfd-val-threshold', v => Math.round(v*100)+'%')">
                     </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>X% Threshold &mdash; low flow</span><span class="bfd-param-value" id="bfd-val-threshold-low">${pct(bfdParams.bf_ratio_threshold_low)}</span></div>
+                        <input type="range" min="0.5" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold_low}"
+                            oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold_low', parseFloat(this.value), 'bfd-val-threshold-low', v => Math.round(v*100)+'%')">
+                    </div>
+                </div>
+                <div class="bfd-param-row">
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>Low-flow anchor</span><span class="bfd-param-value" id="bfd-val-anchor-low">${pctile(bfdParams.low_flow_anchor)}</span></div>
+                        <input type="range" min="0" max="0.9" step="0.01" value="${bfdParams.low_flow_anchor}"
+                            oninput="bfdParamChanged('${siteNo}', 'low_flow_anchor', parseFloat(this.value), 'bfd-val-anchor-low', v => 'P' + Math.round(v*100))">
+                    </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>High-flow anchor</span><span class="bfd-param-value" id="bfd-val-anchor-high">${pctile(bfdParams.high_flow_anchor)}</span></div>
+                        <input type="range" min="0.1" max="1" step="0.01" value="${bfdParams.high_flow_anchor}"
+                            oninput="bfdParamChanged('${siteNo}', 'high_flow_anchor', parseFloat(this.value), 'bfd-val-anchor-high', v => 'P' + Math.round(v*100))">
+                    </div>
+                </div>
+                <div class="bfd-param-row">
                     <div class="bfd-param">
                         <div class="bfd-param-label"><span>Voting Fraction</span><span class="bfd-param-value" id="bfd-val-voting">${pct(bfdParams.voting_fraction)}</span></div>
                         <input type="range" min="0" max="1" step="0.01" value="${bfdParams.voting_fraction}"
                             oninput="bfdParamChanged('${siteNo}', 'voting_fraction', parseFloat(this.value), 'bfd-val-voting', v => Math.round(v*100)+'%')">
                     </div>
+                    <div class="bfd-param"></div>
                 </div>
                 <div class="bfd-param-row" style="margin-bottom:0">
                     <div class="bfd-param">
@@ -1535,6 +1585,11 @@
                     <div class="skill-metric-sub">of ${data.stats.n_days.toLocaleString()} days on record</div>
                 </div>
                 <div class="skill-metric-card" style="border-left-color:#8e24aa">
+                    <div class="skill-metric-label">Threshold Range</div>
+                    <div class="skill-metric-value">${data.threshold_range ? pct(data.threshold_range[0]) + '\u2013' + pct(data.threshold_range[1]) : '\u2014'}</div>
+                    <div class="skill-metric-sub">${data.anchor_flows && data.anchor_flows[0] !== null ? fmtQ(data.anchor_flows[0]) + ' &rarr; ' + fmtQ(data.anchor_flows[1]) + ' cfs' : 'low flow &rarr; high flow'}</div>
+                </div>
+                <div class="skill-metric-card" style="border-left-color:#8e24aa">
                     <div class="skill-metric-label">Pooled Events</div>
                     <div class="skill-metric-value">${data.stats.n_events}</div>
                     <div class="skill-metric-sub">${data.stats.mean_event_duration !== null ? 'mean duration ' + data.stats.mean_event_duration + ' days' : 'none found'}</div>
@@ -1546,8 +1601,14 @@
                 html += `<div style="font-size:11px;color:#999;margin-bottom:8px">Showing ${data.dates.length.toLocaleString()} of ${data.total_points.toLocaleString()} days (downsampled for display; stats above use the full record).</div>`;
             }
 
-            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Hover a point to see each voter’s call')}
-                     <div class="plot-div" id="plot-bfd"></div>`;
+            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Scroll to zoom &mdash; the voter strip follows')}
+                     <div class="plot-div" id="plot-bfd"></div>
+                     <div class="bfd-legend">
+                        <span><i style="background:#1a73e8"></i>method calls BFD</span>
+                        <span><i style="background:#8e24aa"></i>ensemble calls BFD</span>
+                        <span><i style="background:#eceff1;border:1px solid #dde3e6"></i>not BFD</span>
+                        <span><i style="background:rgba(142,36,170,0.12);border:1px solid #e1bee7"></i>pooled event</span>
+                     </div>`;
 
             container.innerHTML = html;
             setTimeout(() => renderBfdChart(data), 0);
@@ -1557,30 +1618,111 @@
             const customdata = data.dates.map((d, i) => {
                 const parts = data.voters.map(v => `${data.voter_labels[v]} ${data.labels[v][i] ? '✓' : '✗'}`);
                 const nVote = data.voters.reduce((s, v) => s + data.labels[v][i], 0);
+                if (data.threshold) parts.push(`<i>threshold here: ${Math.round(data.threshold[i] * 100)}%</i>`);
                 parts.push(`<b>${nVote}/${data.voters.length} voted BFD → Ensemble: ${data.ensemble[i] ? 'BFD' : 'not BFD'}</b>`);
                 return parts.join('<br>');
             });
 
             const qTrace = {
                 x: data.dates, y: data.q, mode: 'lines',
-                line: { color: '#1a73e8', width: 0.9 },
-                name: 'Streamflow',
+                line: { color: '#333', width: 1.8 },
+                name: 'Observed Q',
                 customdata: customdata,
                 hovertemplate: '%{x}<br>Q: %{y:.2f} cfs<br>%{customdata}<extra></extra>',
+                xaxis: 'x', yaxis: 'y',
             };
 
+            // One thin baseflow curve per separation method, toggled from the
+            // legend. Colour is keyed to the method itself, not to its position,
+            // so a gage without PyBFS doesn't repaint the other four. Iterating
+            // `voters` rather than the baseflow keys keeps legend order matching
+            // the strip's rows (jsonify sorts dict keys, which would not).
+            const bfTraces = data.voters.filter(m => (data.baseflow || {})[m]).map(m => ({
+                x: data.dates, y: data.baseflow[m], mode: 'lines',
+                line: { color: BFD_METHOD_COLORS[m] || '#888', width: 1 },
+                name: data.voter_labels[m] || m,
+                hovertemplate: `%{x}<br>${data.voter_labels[m] || m} baseflow: %{y:.2f} cfs<extra></extra>`,
+                xaxis: 'x', yaxis: 'y',
+            }));
+
+            // Voter strip: one row per method, one cell per displayed day, drawn
+            // as a second subplot on the same x axis so it pans/zooms in lockstep
+            // with the hydrograph above it.
+            //
+            // It has to be ONE heatmap trace: Plotly 2.x throws while calculating
+            // a second heatmap that shares a category axis, so the ensemble row is
+            // folded in here and separated by z value instead (0/1 = voter says
+            // no/yes, 2/3 = ensemble says no/yes). The colorscale repeats each
+            // colour across its own band so those four levels stay flat and
+            // discrete rather than interpolating into mid tones.
+            //
+            // Category rows stack bottom-up in the order Plotly meets them, so the
+            // ensemble goes first (bottom row, right above the axis) and the voters
+            // follow reversed to land in listed order above it. An explicit
+            // categoryarray is not an option — that also throws on a heatmap.
+            const stripVoters = data.voters.slice().reverse();
+            const asText = (row) => row.map(v => v ? 'BFD' : 'not BFD');
+            const strip = {
+                type: 'heatmap',
+                x: data.dates,
+                y: ['Ensemble'].concat(stripVoters.map(v => data.voter_labels[v])),
+                z: [data.ensemble.map(v => v ? 3 : 2)].concat(stripVoters.map(v => data.labels[v])),
+                text: [asText(data.ensemble)].concat(stripVoters.map(v => asText(data.labels[v]))),
+                zmin: 0, zmax: 3, zsmooth: false,
+                colorscale: [
+                    [0, '#eceff1'], [0.1667, '#eceff1'],      // 0 voter: not BFD
+                    [0.1667, '#1a73e8'], [0.5, '#1a73e8'],    // 1 voter: BFD
+                    [0.5, '#eceff1'], [0.8333, '#eceff1'],    // 2 ensemble: not BFD
+                    [0.8333, '#8e24aa'], [1, '#8e24aa'],      // 3 ensemble: BFD
+                ],
+                showscale: false, ygap: 2, xgap: 0, showlegend: false,
+                hovertemplate: '%{x}<br><b>%{y}</b>: %{text}<extra></extra>',
+                xaxis: 'x', yaxis: 'y2',
+            };
+
+            // Give the strip a fixed ~22px per row so it stays legible whether or
+            // not PyBFS voted, and let the hydrograph absorb the rest.
+            //
+            // No rangeslider on this chart: it can only draw every trace on its
+            // x axis, so the strip smeared across it and buried the hydrograph
+            // overview it exists to give. The strip spans the whole record and
+            // serves as that overview instead; scroll/drag still zoom, and the
+            // modebar's reset returns to the full extent.
+            const nRows = data.voters.length + 1;
+            const stripPx = nRows * 22;
+            const marginT = 44, marginB = 50;
+            const height = 340 + stripPx + marginT + marginB;
+            const plotPx = height - marginT - marginB;
+            const stripFrac = Math.min(0.45, stripPx / plotPx);
+            const hydroBottom = stripFrac + 0.07;
+
+            // Event bands stay inside the hydrograph so they can't tint the strip.
             const eventShapes = data.events.map(ev => ({
                 type: 'rect', xref: 'x', x0: ev.start_date, x1: ev.end_date,
-                yref: 'paper', y0: 0, y1: 1,
+                yref: 'y domain', y0: 0, y1: 1,
                 fillcolor: 'rgba(142,36,170,0.12)', line: { width: 0 },
             }));
 
-            renderChart('plot-bfd', [qTrace], {
-                margin: { l: 60, r: 20, t: 10, b: 50 },
-                xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
-                yaxis: { title: { text: 'Streamflow (cfs)', font: { size: 11 } }, type: 'log' },
+            renderChart('plot-bfd', [qTrace].concat(bfTraces, [strip]), {
+                height: height,
+                margin: { l: 95, r: 20, t: marginT, b: marginB },
+                xaxis: { type: 'date', anchor: 'y2' },
+                yaxis: {
+                    title: { text: 'Streamflow (cfs)', font: { size: 11 } },
+                    domain: [hydroBottom, 1], rangemode: 'tozero',
+                },
+                yaxis2: {
+                    domain: [0, stripFrac], anchor: 'x', type: 'category',
+                    tickfont: { size: 10 }, showgrid: false, zeroline: false,
+                    fixedrange: true,
+                },
                 shapes: eventShapes,
                 hovermode: 'closest',
+                showlegend: true,
+                legend: {
+                    orientation: 'h', x: 0, y: 1, xanchor: 'left', yanchor: 'bottom',
+                    font: { size: 10 }, bgcolor: 'rgba(0,0,0,0)',
+                },
                 plot_bgcolor: '#fff', paper_bgcolor: '#fff',
                 font: { family: 'Inter,sans-serif', size: 11 },
             });
