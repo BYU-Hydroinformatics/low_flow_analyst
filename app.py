@@ -20,8 +20,11 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, render_template, jsonify, send_from_directory, Response, request
+from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
+
+load_dotenv()
 
 import pybfs
 from baseflow.separation import chapman, lh, eckhardt, strict_baseflow
@@ -506,7 +509,7 @@ def run_bfs_on_the_fly(site_no, sf_dir=None, p_dir=None, b_dir=None):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', carto_api_key=os.environ.get('CARTO_API_KEY', ''))
 
 
 @app.route('/api/gages')
