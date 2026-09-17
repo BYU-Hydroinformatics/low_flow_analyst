@@ -1,3 +1,44 @@
+# Note to Amin — bfd_db is now a real dependency, not a sys.path hack
+
+2026-09-17
+
+The BFD ensemble panel's threshold-adaptation logic (magnitude-adaptive
+threshold, ratio clamp, per-voter agreement stats — added 2026-09-09) was
+written directly in this repo's `bfd_ensemble.py` instead of in
+`us_baseflow_db`, which is where the rest of the ensemble-voting algorithm
+lives and where the national database build reads it from. That's now fixed:
+the algorithm moved to `bfd_db.labeling.ensemble` (with tests, and
+`docs/adaptive-bfd-threshold.md` in that repo), and `bfd_ensemble.py` here is
+back to being a thin adapter — gage loading, raw-estimate caching, response
+shaping, nothing else.
+
+This also resolves the open item from the note below ("BFD ensemble needs
+`bfd_db` to be installable"): `us_baseflow_db` had a broken
+`build-backend` in its `pyproject.toml` (not a real entry point — nothing had
+ever actually tried to `pip install` it), fixed to `setuptools.build_meta`.
+`requirements.txt` now installs it as a normal git dependency:
+
+```
+bfd-db[labeling] @ git+https://github.com/BYU-Hydroinformatics/us_baseflow_db.git@main
+```
+
+The `BFD_DB_SRC` env var and the `sys.path.insert` it drove are gone —
+`bfd_ensemble.py` just does `from bfd_db.labeling import ensemble` like any
+other dependency. `[labeling]` is a new extra on `bfd-db` that pulls in only
+what the algorithm needs (baseflowx, pybfs, scikit-learn, joblib), not the
+database-build-only stack (geopandas, tqdm, click) or plotting (matplotlib) —
+worth keeping in mind given the free-tier memory ceiling below.
+
+**Before this next deploys**, pin that git ref to a commit or tag instead of
+floating `@main` — see `docs/adaptive-bfd-threshold.md` §4 — so a future push
+to `us_baseflow_db` can't silently change this app's live labels. Also added:
+`pyarrow` was missing from `requirements.txt` even though `bfd_ensemble.py`'s
+caching has always needed it for `to_parquet`/`read_parquet` — it happened to
+be present locally as someone else's transitive dependency, which would not
+have been true on Render.
+
+---
+
 # Note to Amin — LFA is now deployed, and two of your paths moved
 
 2026-09-03

@@ -35,9 +35,9 @@ from baseflow.skill import separation_skill, forecast_skill
 from calibrate_all_gages import calibrate_site, load_drainage_areas
 from run_bfs_all_gages import process_site, load_site_params, load_streamflow
 
-# bfd_ensemble needs the external bfd_db package (see BFD_DB_SRC in
-# bfd_ensemble.py), which is not part of this repo. Where it is absent the app
-# serves everything except the BFD ensemble panel.
+# bfd_ensemble needs the bfd-db package (pip installed from
+# us_baseflow_db, see requirements.txt), not part of this repo. Where it is
+# absent the app serves everything except the BFD ensemble panel.
 try:
     import bfd_ensemble
     BFD_ENSEMBLE_ERROR = None
@@ -1259,8 +1259,8 @@ def api_bfd_ensemble(site_no):
     if bfd_ensemble is None:
         return jsonify({
             'error': 'BFD ensemble is not available in this deployment: '
-                     f'{BFD_ENSEMBLE_ERROR}. It requires the bfd_db package '
-                     '(set BFD_DB_SRC to its src directory).'
+                     f'{BFD_ENSEMBLE_ERROR}. It requires the bfd-db package '
+                     '(see requirements.txt).'
         }), 503
     if site_no not in site_info:
         return jsonify({'error': 'Gage not found'}), 404

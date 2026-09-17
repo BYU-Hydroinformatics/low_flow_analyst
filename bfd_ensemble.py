@@ -2,15 +2,19 @@
 BFD Ensemble panel support.
 
 Wires the LFA app to the shared `bfd_db` labeling code in us_baseflow_db
-(RF-BFD classifier, baseflowx digital filters, PyBFS) so every gage can show
-which "voters" call each day baseflow-dominant, with dmin/t_c/threshold/
-voting-fraction all adjustable at request time.
+(RF-BFD classifier, baseflowx digital filters, PyBFS, magnitude-adaptive
+threshold, ensemble vote) so every gage can show which "voters" call each day
+baseflow-dominant, with dmin/t_c/threshold/voting-fraction all adjustable at
+request time.
 
-Design: separation itself (RF predict, the 4 baseflowx filters incl. Boughton
-calibration, PyBFS) is the expensive part and does not depend on the tunable
-parameters, so it is run once per gage and cached to disk as raw per-method
-baseflow estimates. Turning those into 0/1 labels, an ensemble vote, and
-pooled events is cheap arithmetic done fresh on every request.
+The labeling *algorithm* lives entirely in `bfd_db.labeling.ensemble` and
+`bfd_db.events.pooling` — see docs/adaptive-bfd-threshold.md in us_baseflow_db.
+This module is a thin adapter: it loads gage streamflow, caches the expensive
+per-method raw baseflow estimates to disk (separation itself does not depend
+on the tunable threshold/voting/pooling parameters, so it is run once per gage
+and reused), and shapes the result for the API/chart. Turning cached raw
+estimates into 0/1 labels, an ensemble vote, and pooled events is cheap
+arithmetic done fresh on every request.
 """
 
 from __future__ import annotations
@@ -20,17 +24,16 @@ import os
 import numpy as np
 import pandas as pd
 
-BFD_DB_SRC = os.environ.get(
-    "BFD_DB_SRC",
-    "/Users/amin/Downloads/research/projects/us_baseflow_db/src",
-)
-
-import sys
-if BFD_DB_SRC not in sys.path:
-    sys.path.insert(0, BFD_DB_SRC)
-
 from bfd_db.config import PipelineConfig
 from bfd_db.labeling import baseflowx_methods, pybfs_labeling, rf_bfd
+from bfd_db.labeling.ensemble import (
+    HIGH_FLOW_ANCHOR,
+    LOW_FLOW_ANCHOR,
+    anchor_flows,
+    effective_threshold,
+    label_from_ratio,
+    voter_agreement_stats,
+)
 from bfd_db.events.pooling import pool_events
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,15 +42,6 @@ CACHE_DIR = os.path.join(BASE_DIR, "bfd_ensemble_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 _DEFAULT_CONFIG = PipelineConfig()
-
-# Flow-duration anchors for the magnitude-adaptive threshold. The ratio test is
-# relaxed to `bf_ratio_threshold_low` at or below the gage's own LOW_FLOW_ANCHOR
-# quantile and held at `bf_ratio_threshold` at or above HIGH_FLOW_ANCHOR, with a
-# log-flow ramp between. Anchoring on the gage's own flow duration curve (rather
-# than absolute cfs) is what lets one setting travel across gages whose median
-# flows span several orders of magnitude.
-LOW_FLOW_ANCHOR = 0.10
-HIGH_FLOW_ANCHOR = 0.50
 
 # Ratio-based voters (raw qb_<method> cached, threshold applied at request time).
 RATIO_METHODS = list(_DEFAULT_CONFIG.baseflowx_methods)  # eckhardt, chapman, lyne_hollick, boughton
@@ -105,15 +99,11 @@ def get_or_compute_raw(site_no: str, force: bool = False) -> pd.DataFrame:
     rf_model, rf_scaler = _get_rf_model()
     rf_label = rf_bfd.label_gage(q, rf_model, rf_scaler)
 
-    bfx_df = baseflowx_methods.label_gage(
-        q, methods=RATIO_METHODS, bf_ratio_threshold=_DEFAULT_CONFIG.bf_ratio_threshold
-    )
-
     raw = pd.DataFrame(index=q.index)
     raw["Q"] = q
     raw["rf_bfd"] = rf_label
     for method in RATIO_METHODS:
-        raw[f"qb_{method}"] = bfx_df[f"qb_{method}"]
+        raw[f"qb_{method}"] = baseflowx_methods.separate_baseflow(q, method)
 
     pybfs_params = pybfs_labeling.load_pybfs_params(site_no)
     if pybfs_params is not None:
@@ -126,50 +116,6 @@ def get_or_compute_raw(site_no: str, force: bool = False) -> pd.DataFrame:
     return raw
 
 
-def anchor_flows(
-    q: pd.Series, low_flow_anchor: float, high_flow_anchor: float
-) -> tuple[float, float]:
-    """The two flows the threshold ramp is pinned to, in cfs.
-
-    Both are quantiles of the gage's own non-zero flow, so `low_flow_anchor=0.10`
-    is the 10th percentile of flow -- the hydrologic Q90, exceeded 90% of the
-    time -- not the 90th.
-    """
-    q_pos = q.replace(0, np.nan)
-    return float(q_pos.quantile(low_flow_anchor)), float(q_pos.quantile(high_flow_anchor))
-
-
-def effective_threshold(
-    q: pd.Series,
-    bf_ratio_threshold: float,
-    bf_ratio_threshold_low: float,
-    low_flow_anchor: float = LOW_FLOW_ANCHOR,
-    high_flow_anchor: float = HIGH_FLOW_ANCHOR,
-) -> pd.Series:
-    """Per-day ratio threshold, ramped by flow magnitude.
-
-    Each separation method plateaus at its own ceiling of qb/Q well below 1.0 at
-    low flow (Eckhardt ~0.87, Chapman ~0.75, PyBFS ~0.60 on a typical gage), so a
-    flat 0.95 is unreachable exactly where the record is most obviously
-    baseflow-dominant. Relaxing the threshold as flow falls recovers those days
-    without touching the storm end of the record.
-    """
-    q_pos = q.replace(0, np.nan)
-    q_lo, q_hi = anchor_flows(q, low_flow_anchor, high_flow_anchor)
-
-    # No usable ramp: degenerate record (near-constant or all-zero flow), or
-    # anchors given in the wrong order. Fall back to the flat strict threshold,
-    # which the reported threshold_range makes visible.
-    if not (np.isfinite(q_lo) and np.isfinite(q_hi) and q_hi > q_lo > 0):
-        return pd.Series(bf_ratio_threshold, index=q.index)
-
-    span = np.log(q_hi) - np.log(q_lo)
-    s = (np.log(q_pos) - np.log(q_lo)) / span
-    t = bf_ratio_threshold_low + (bf_ratio_threshold - bf_ratio_threshold_low) * s.clip(0, 1)
-    # Days with no flow keep the strict threshold; their ratio is NaN anyway.
-    return t.fillna(bf_ratio_threshold)
-
-
 def apply_params(
     raw: pd.DataFrame,
     bf_ratio_threshold: float,
@@ -180,34 +126,24 @@ def apply_params(
     low_flow_anchor: float = LOW_FLOW_ANCHOR,
     high_flow_anchor: float = HIGH_FLOW_ANCHOR,
 ) -> dict:
-    """Derive labels/ensemble/events from cached raw voter data for the given params."""
-    if bf_ratio_threshold_low is None:
-        bf_ratio_threshold_low = bf_ratio_threshold
-    # A "low-flow" threshold above the high-flow one would invert the ramp.
-    bf_ratio_threshold_low = min(bf_ratio_threshold_low, bf_ratio_threshold)
-    low_flow_anchor = float(np.clip(low_flow_anchor, 0.0, 1.0))
-    high_flow_anchor = float(np.clip(high_flow_anchor, 0.0, 1.0))
-
+    """Derive labels/ensemble/events from cached raw voter data for the given
+    params, shape it for the API/chart. All labeling math (threshold ramp,
+    ratio clamp, voting) comes from bfd_db.labeling.ensemble.
+    """
     t_eff = effective_threshold(
         raw["Q"], bf_ratio_threshold, bf_ratio_threshold_low,
         low_flow_anchor, high_flow_anchor,
     )
     q_lo_cfs, q_hi_cfs = anchor_flows(raw["Q"], low_flow_anchor, high_flow_anchor)
 
-    def _ratio(col):
-        # qb > Q is unphysical but does happen (PyBFS especially). Treat any day
-        # whose separated baseflow meets or exceeds total flow as fully
-        # baseflow-dominant rather than letting a 40x ratio through as a number.
-        return (raw[col] / raw["Q"].replace(0, np.nan)).clip(upper=1.0)
-
     labels = pd.DataFrame(index=raw.index)
     labels["rf_bfd"] = raw["rf_bfd"]
     for method in RATIO_METHODS:
         col = f"qb_{method}"
         if col in raw.columns:
-            labels[method] = (_ratio(col) >= t_eff).astype(int).fillna(0)
+            labels[method] = label_from_ratio(raw[col], raw["Q"], t_eff)
     if "qb_pybfs" in raw.columns:
-        labels["pybfs"] = (_ratio("qb_pybfs") >= t_eff).astype(int).fillna(0)
+        labels["pybfs"] = label_from_ratio(raw["qb_pybfs"], raw["Q"], t_eff)
 
     vote_frac = labels.mean(axis=1)
     ensemble = (vote_frac >= voting_fraction).astype(int)
@@ -217,20 +153,13 @@ def apply_params(
     voters = list(labels.columns)
     total_points = len(raw)
 
-    # Per-voter scorecard over the FULL record (not the downsampled series):
-    # how often each method calls BFD, and how often it lands on the same side
-    # as the ensemble it helped produce.
-    voter_stats = {
-        v: {
-            "bfd_fraction": round(float(labels[v].mean()), 4),
-            "agreement": round(float((labels[v] == ensemble).mean()), 4),
-        }
-        for v in voters
-    }
+    # Per-voter scorecard over the FULL record (not the downsampled display
+    # series below).
+    voter_stats = voter_agreement_stats(labels, ensemble)
 
     # Downsample for chart transport/rendering on long records (matches the
     # app's existing >5000-point convention, e.g. api_gage_data); events and
-    # stats below are still computed from the full-resolution series above.
+    # stats above are still computed from the full-resolution series.
     step = max(1, total_points // 5000) if total_points > 5000 else 1
     idx = raw.index[::step]
     dates = idx.strftime("%Y-%m-%d").tolist()

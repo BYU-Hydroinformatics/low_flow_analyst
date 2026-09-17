@@ -14,3 +14,11 @@ scikit-learn>=1.3.0
 joblib>=1.2.0                          # imported directly by app.py for the BFD-ML model
 baseflowx==0.2.1                       # pinned: 0.2.2 changed param_calibrate()'s signature,
                                         # incompatible with bfd_db's Boughton calibration adapter
+pyarrow>=14.0                          # bfd_ensemble.py caches raw voter data to parquet
+bfd-db[labeling] @ git+https://github.com/BYU-Hydroinformatics/us_baseflow_db.git@4437be7179400b26d6dfa0c67782387ef84a7bc7
+                                        # BFD ensemble panel: shared labeling/ensemble algorithm.
+                                        # [labeling] skips the database-build-only stack
+                                        # (geopandas, tqdm, click) this app doesn't need.
+                                        # Pinned to a commit so a future us_baseflow_db push
+                                        # can't silently change this app's live labels; bump
+                                        # deliberately (see docs/adaptive-bfd-threshold.md §4).
