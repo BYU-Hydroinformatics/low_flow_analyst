@@ -1273,6 +1273,9 @@ def api_bfd_ensemble(site_no):
         voting_fraction = float(request.args.get('voting_fraction', 0.5))
         t_c = int(request.args.get('t_c', 3))
         d_min = int(request.args.get('d_min', 7))
+        use_flatness_vote = request.args.get('use_flatness_vote', 'false').lower() == 'true'
+        flatness_window = int(request.args.get('flatness_window', bfd_ensemble.FLATNESS_WINDOW))
+        flatness_cv_threshold = float(request.args.get('flatness_cv_threshold', bfd_ensemble.FLATNESS_CV_THRESHOLD))
     except ValueError:
         return jsonify({'error': 'Invalid parameter value'}), 400
 
@@ -1286,6 +1289,9 @@ def api_bfd_ensemble(site_no):
             voting_fraction=voting_fraction,
             t_c=t_c,
             d_min=d_min,
+            use_flatness_vote=use_flatness_vote,
+            flatness_window=flatness_window,
+            flatness_cv_threshold=flatness_cv_threshold,
         )
         return jsonify(result)
     except bfd_ensemble.GageNotFoundError:

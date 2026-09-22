@@ -27,10 +27,14 @@ import pandas as pd
 from bfd_db.config import PipelineConfig
 from bfd_db.labeling import baseflowx_methods, pybfs_labeling, rf_bfd
 from bfd_db.labeling.ensemble import (
+    FLATNESS_CV_THRESHOLD,
+    FLATNESS_WINDOW,
     HIGH_FLOW_ANCHOR,
     LOW_FLOW_ANCHOR,
     anchor_flows,
+    apply_flatness_override,
     effective_threshold,
+    flatness_vote,
     label_from_ratio,
     voter_agreement_stats,
 )
@@ -53,6 +57,7 @@ VOTER_LABELS = {
     "lyne_hollick": "Lyne-Hollick",
     "boughton": "Boughton",
     "pybfs": "PyBFS",
+    "flatness": "Flatness",
 }
 
 _rf_model = None
@@ -125,6 +130,9 @@ def apply_params(
     bf_ratio_threshold_low: float | None = None,
     low_flow_anchor: float = LOW_FLOW_ANCHOR,
     high_flow_anchor: float = HIGH_FLOW_ANCHOR,
+    use_flatness_vote: bool = False,
+    flatness_window: int = FLATNESS_WINDOW,
+    flatness_cv_threshold: float = FLATNESS_CV_THRESHOLD,
 ) -> dict:
     """Derive labels/ensemble/events from cached raw voter data for the given
     params, shape it for the API/chart. All labeling math (threshold ramp,
@@ -147,6 +155,16 @@ def apply_params(
 
     vote_frac = labels.mean(axis=1)
     ensemble = (vote_frac >= voting_fraction).astype(int)
+
+    # Flatness override: rescues flat recessions the digital filters lag
+    # behind on, without diluting the majority vote on every other day (an
+    # equal-weight vote here would — see apply_flatness_override()'s
+    # docstring). Added to `labels`/voter_stats for display only after the
+    # override, so it never feeds back into vote_frac above.
+    if use_flatness_vote:
+        flatness = flatness_vote(raw["Q"], flatness_window, flatness_cv_threshold)
+        labels["flatness"] = flatness
+        ensemble = apply_flatness_override(ensemble, flatness)
 
     events = pool_events(ensemble, t_c=t_c, d_min=d_min)
 
@@ -227,6 +245,9 @@ def get_ensemble_result(
     bf_ratio_threshold_low: float = 0.75,
     low_flow_anchor: float = LOW_FLOW_ANCHOR,
     high_flow_anchor: float = HIGH_FLOW_ANCHOR,
+    use_flatness_vote: bool = False,
+    flatness_window: int = FLATNESS_WINDOW,
+    flatness_cv_threshold: float = FLATNESS_CV_THRESHOLD,
 ) -> dict:
     raw = get_or_compute_raw(site_no)
     return apply_params(
@@ -234,4 +255,7 @@ def get_ensemble_result(
         bf_ratio_threshold_low=bf_ratio_threshold_low,
         low_flow_anchor=low_flow_anchor,
         high_flow_anchor=high_flow_anchor,
+        use_flatness_vote=use_flatness_vote,
+        flatness_window=flatness_window,
+        flatness_cv_threshold=flatness_cv_threshold,
     )

@@ -1467,7 +1467,7 @@
 
         // ===== BFD Ensemble =====
         // Per-gage tunable parameters (bf_ratio_threshold = "X% threshold").
-        let bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+        let bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
         // Categorical slots 1-5 of the validated palette, pinned per method so a
         // method keeps its colour whether or not the others are present.
         const BFD_METHOD_COLORS = {
@@ -1481,7 +1481,7 @@
 
         async function loadBfdEnsemble(siteNo) {
             const container = document.getElementById('bfd-ensemble-container');
-            bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7 };
+            bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
             container.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD ensemble (first load per gage caches the voters)...</div>';
             await fetchAndRenderBfdEnsemble(siteNo);
         }
@@ -1507,6 +1507,11 @@
             document.getElementById(displayId).textContent = displayFmt(value);
             clearTimeout(bfdUpdateTimer);
             bfdUpdateTimer = setTimeout(() => fetchAndRenderBfdEnsemble(siteNo), 250);
+        }
+
+        function bfdFlatnessToggled(siteNo, checked) {
+            bfdParams.use_flatness_vote = checked;
+            fetchAndRenderBfdEnsemble(siteNo);
         }
 
         function renderBfdEnsemble(siteNo, data) {
@@ -1573,6 +1578,26 @@
                         <div class="bfd-param-label"><span>d<sub>min</sub> (min duration)</span><span class="bfd-param-value" id="bfd-val-dmin">${bfdParams.d_min} days</span></div>
                         <input type="range" min="1" max="30" step="1" value="${bfdParams.d_min}"
                             oninput="bfdParamChanged('${siteNo}', 'd_min', parseInt(this.value), 'bfd-val-dmin', v => v+' days')">
+                    </div>
+                </div>
+                <div class="bfd-param-row" style="margin-bottom:0">
+                    <div class="bfd-param">
+                        <div class="bfd-param-label">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                                <input type="checkbox" ${bfdParams.use_flatness_vote ? 'checked' : ''}
+                                    onchange="bfdFlatnessToggled('${siteNo}', this.checked)">
+                                <span>Flatness override</span>
+                            </label>
+                        </div>
+                        <div style="font-size:11px;color:#999;line-height:1.4">Flags a day BFD from flow flatness alone (rolling CV below a threshold, not rising), on top of the method vote above &mdash; catches flat recessions the digital filters lag behind on. Only adds days; never removes one the vote already called BFD.</div>
+                    </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>Flatness window</span><span class="bfd-param-value" id="bfd-val-flat-window">${bfdParams.flatness_window} days</span></div>
+                        <input type="range" min="3" max="30" step="1" value="${bfdParams.flatness_window}"
+                            oninput="bfdParamChanged('${siteNo}', 'flatness_window', parseInt(this.value), 'bfd-val-flat-window', v => v+' days')">
+                        <div class="bfd-param-label" style="margin-top:8px"><span>Flatness CV threshold</span><span class="bfd-param-value" id="bfd-val-flat-cv">${(bfdParams.flatness_cv_threshold * 100).toFixed(0)}%</span></div>
+                        <input type="range" min="0.01" max="0.2" step="0.01" value="${bfdParams.flatness_cv_threshold}"
+                            oninput="bfdParamChanged('${siteNo}', 'flatness_cv_threshold', parseFloat(this.value), 'bfd-val-flat-cv', v => Math.round(v*100)+'%')">
                     </div>
                 </div>
             </div>`;
