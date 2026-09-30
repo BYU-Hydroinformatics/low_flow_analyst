@@ -59,6 +59,10 @@ downsampling, or the response shape belongs here.
 | `threshold_range` | `[min, max]` | realized span of `t_eff` over the full record |
 | `anchor_flows` | `[q_lo, q_hi]` cfs, either may be `null` | what the anchor percentiles resolve to on this gage |
 | `voter_stats` | `{voter: {bfd_fraction, agreement}}` | computed over the full record, not the downsampled series |
+| `zero_flow` | `int[]`, one per displayed date | 1 on days with `Q <= 0`; every voter and the ensemble are forced to not-BFD there (`bfd_db` rule, see its doc §5.1) |
+| `events[].voter_days` | `{voter: int}` | days inside the event each voter called BFD (full-resolution labels), for the hover card |
+| `events[].mean_q` | `float` | mean flow (cfs) over the event |
+| `stats.zero_flow_days` | `int` | zero-flow days in the full record |
 
 A defaults asymmetry worth knowing: `bfd_ensemble.apply_params()` takes
 `bf_ratio_threshold_low=None` and falls back to the flat `bf_ratio_threshold`
@@ -88,6 +92,14 @@ Feedback surfaces:
   each voter's call.
 - **Voter chips** — per-method BFD rate and agreement with the ensemble
   (`voter_stats`), both computed over the full record.
+- **Event hover** — hovering a pooled event band shows its dates, day counts,
+  and each voter's days called BFD; the same breakdown appears in the
+  forecast-skill modal.
+- **Focus period** — date inputs / zoom limit the hydrograph, the voter strip
+  and the forecast-skill events to one window; the per-voter stats stay
+  full-record.
+- **Method checkboxes** — each separation-method chip toggles that method's
+  baseflow curve on the hydrograph (RF-BFD and flatness have no curve).
 
 Slider changes are debounced 250 ms and re-fetch; nothing is recomputed
 server-side beyond the cheap arithmetic in `bfd_db.labeling.ensemble` and

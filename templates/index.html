@@ -184,6 +184,11 @@
         .bfd-voter-chip .bfd-chip-stat {
             font-weight: 400; color: #8e6a99; margin-left: 6px;
         }
+        .bfd-focus { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 8px; font-size:12px; color:#555; }
+        .bfd-focus input[type=date] { font:inherit; padding:3px 6px; border:1px solid #ccc; border-radius:4px; }
+        .bfd-focus button { font:inherit; padding:3px 9px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer; }
+        .bfd-focus button:hover { background:#f3e5f5; border-color:#8e24aa; }
+        .bfd-focus .bfd-focus-info { color:#8e24aa; margin-left:4px; }
         .bfd-legend {
             display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
             padding: 8px 12px; font-size: 11px; color: #666;
@@ -466,13 +471,13 @@
         <div class="fc-modal-body">
             <!-- Top: full hydrograph — click any sequence to focus -->
             <div class="fc-overview-wrap">
-                <div class="fc-panel-label" style="cursor:default">Full Hydrograph &mdash; click a highlighted sequence to focus</div>
+                <div class="fc-panel-label" style="cursor:default" id="fc-overview-label">Full Hydrograph &mdash; click a highlighted sequence to focus</div>
                 <div id="fc-modal-overview"></div>
             </div>
             <!-- Bottom: zoomed + forecast side by side -->
             <div class="fc-detail-row">
                 <div class="fc-panel">
-                    <div class="fc-panel-label">Zoomed to sequence</div>
+                    <div class="fc-panel-label" id="fc-zoom-label">Zoomed to sequence</div>
                     <div class="fc-panel-plot" id="fc-modal-hyd"></div>
                 </div>
                 <div class="fc-panel">
@@ -508,7 +513,7 @@
         let map, clusterGroup, rawGroup;
         let allGages = [];
         let allMarkers = [];
-        let clusteringEnabled = true;
+        let clusteringEnabled = false;   // markers start ungrouped; the legend toggle turns grouping on
         let filterRefOnly = false;
         let filterNaturalOnly = false;
         let filterLowFlowOnly = false;
@@ -523,6 +528,7 @@
         let filterFavoritesOnly = false;
         let currentSymbolize = 'status';
         let forecastModalData = null;
+        let fcNoun = 'sequence';   // 'event' when the modal shows ensemble-pooled events
         let currentSeqIdx = 0;
 
         function loadFavorites() {
@@ -537,11 +543,14 @@
         }
 
         // ===== Symbolize by Metric =====
+        // Every ramp is a band between two saturated end colours (no near-white
+        // start, which vanishes on the light basemap). Error: low = blue, high = red.
+        const ERROR_STOPS = ['#2b83ba', '#d7191c'];
         const RAMPS = {
-            rmse:        { stops: ['#2e7d32', '#ffca28', '#d32f2f'], label: 'Forecast RMSE',  unit: 'cfs·day' },
-            mae:         { stops: ['#2e7d32', '#ffca28', '#d32f2f'], label: 'Forecast MAE',   unit: 'cfs·day' },
-            n_sequences: { stops: ['#e3f2fd', '#1565c0'],            label: 'N Sequences',    unit: '' },
-            drain_area:  { stops: ['#e8f5e9', '#1b5e20'],            label: 'Drainage Area',  unit: 'mi²' },
+            rmse:        { stops: ERROR_STOPS, label: 'Forecast RMSE',  unit: 'cfs·day' },
+            mae:         { stops: ERROR_STOPS, label: 'Forecast MAE',   unit: 'cfs·day' },
+            n_sequences: { stops: ['#26a69a', '#283593'],            label: 'N Sequences',    unit: '' },
+            drain_area:  { stops: ['#9ccc65', '#1a237e'],            label: 'Drainage Area',  unit: 'mi²' },
         };
         const METRIC_KEY = { rmse: 'overall_RMSE', mae: 'overall_MAE', n_sequences: 'n_sequences', drain_area: 'drain_area_sqmi' };
         let metricRanges = {};
@@ -554,8 +563,9 @@
         }
 
         function getColorFromRamp(stops, t) {
-            if (stops.length === 2) return lerpColor(stops[0], stops[1], t);
-            return t <= 0.5 ? lerpColor(stops[0], stops[1], t*2) : lerpColor(stops[1], stops[2], (t-0.5)*2);
+            const seg = (stops.length - 1) * t;
+            const i = Math.min(stops.length - 2, Math.floor(seg));
+            return lerpColor(stops[i], stops[i + 1], seg - i);
         }
 
         function computeMetricRanges() {
@@ -609,9 +619,7 @@
                 statusEl.style.display = 'none';
                 const ramp = RAMPS[currentSymbolize];
                 const range = metricRanges[currentSymbolize] || {min: 0, max: 1};
-                const gradient = ramp.stops.length === 2
-                    ? `linear-gradient(to right, ${ramp.stops[0]}, ${ramp.stops[1]})`
-                    : `linear-gradient(to right, ${ramp.stops[0]}, ${ramp.stops[1]}, ${ramp.stops[2]})`;
+                const gradient = `linear-gradient(to right, ${ramp.stops.join(', ')})`;
                 rampEl.innerHTML = `
                     <div style="background:${gradient};height:10px;width:142px;border-radius:3px;margin:4px 0 2px 0;border:1px solid #ddd;"></div>
                     <div style="display:flex;justify-content:space-between;width:142px;font-size:10px;color:#555;">
@@ -734,7 +742,7 @@
                     <div id="ramp-legend" style="display:none;"></div>
                     <hr class="legend-divider">
                     <div class="toggle-row" onclick="toggleClustering()">
-                        <span class="toggle-switch on" id="cluster-toggle"></span>
+                        <span class="toggle-switch" id="cluster-toggle"></span>
                         <span>Group markers</span>
                     </div>
                     <div class="toggle-row" onclick="toggleRefOnly()">
@@ -769,7 +777,6 @@
                 chunkDelay: 10,
             });
             rawGroup = L.layerGroup();
-            map.addLayer(clusterGroup);
         }
 
         // ===== Load Gages =====
@@ -828,7 +835,7 @@
                 markerMap[gage.site_no] = marker;
                 allMarkers.push(marker);
             }
-            clusterGroup.addLayers(allMarkers);
+            refreshMarkers();
             updateLegendDisplay();
             clearLoadStatus();
         }
@@ -1044,28 +1051,29 @@
             }
             html += `</div>`;
 
+            // BFD Ensemble section (any gage with a streamflow record; PyBFS
+            // just drops out of the vote if the gage isn't calibrated)
+            bfdCalibrated = info.status === 'calibrated';
+            html += `<div id="bfd-ensemble-container">
+                <button class="action-btn btn-bfd" style="width:100%;margin-bottom:16px" onclick="loadBfdEnsemble('${siteNo}')">Explore BFD Ensemble</button>
+            </div>`;
+
+            // Skill assessment section (for calibrated gages)
+            if (info.status === 'calibrated') {
+                html += `<div id="skill-container">
+                    <button class="action-btn btn-skill" style="width:100%;margin-bottom:16px" onclick="loadSkill('${siteNo}')">Evaluate Model Skill</button>
+                </div>`;
+            }
+
             // Drought section
             html += `<div id="drought-container">
                 <button class="action-btn btn-drought" style="width:100%;margin-bottom:16px" onclick="loadDrought('${siteNo}')">Load Drought Conditions</button>
-            </div>`;
-
-            // BFD Ensemble section (any gage with a streamflow record; PyBFS
-            // just drops out of the vote if the gage isn't calibrated)
-            html += `<div id="bfd-ensemble-container">
-                <button class="action-btn btn-bfd" style="width:100%;margin-bottom:16px" onclick="loadBfdEnsemble('${siteNo}')">Explore BFD Ensemble</button>
             </div>`;
 
             // Anomaly section (for calibrated gages)
             if (info.status === 'calibrated') {
                 html += `<div id="anomaly-container">
                     <button class="action-btn btn-anomaly" style="width:100%;margin-bottom:16px" onclick="loadAnomalies('${siteNo}')">Detect Flow Anomalies</button>
-                </div>`;
-            }
-
-            // Skill assessment section (for calibrated gages)
-            if (info.status === 'calibrated') {
-                html += `<div id="skill-container">
-                    <button class="action-btn btn-skill" style="width:100%;margin-bottom:16px" onclick="loadSkill('${siteNo}')">Evaluate Model Skill</button>
                 </div>`;
             }
 
@@ -1478,10 +1486,22 @@
             pybfs: '#e87ba4',
         };
         let bfdUpdateTimer = null;
+        let bfdCalibrated = false;   // forecast skill needs PyBFS parameters
+        let bfdSkillOn = false;      // once requested, skill re-runs whenever the events change
+        let bfdHiddenCurves = new Set();   // methods whose baseflow curve is switched off on the hydrograph
+        let bfdFocus = null;         // [start, end] ISO dates the hydrograph is limited to, or null for the full record
+        let bfdData = null;          // last ensemble response (for focus bookkeeping)
+        let bfdSkillData = null;     // last full-record skill response, filtered client-side by the focus
+        let bfdSkillSite = null;
+        let bfdFocusTimer = null;
+        let bfdSkillSeq = 0;         // drops responses from superseded slider positions
 
         async function loadBfdEnsemble(siteNo) {
             const container = document.getElementById('bfd-ensemble-container');
             bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
+            bfdSkillOn = false;
+            bfdFocus = null;
+            bfdHiddenCurves = new Set();
             container.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD ensemble (first load per gage caches the voters)...</div>';
             await fetchAndRenderBfdEnsemble(siteNo);
         }
@@ -1525,7 +1545,13 @@
             const voterChips = data.voters.map(v => {
                 const vs = data.voter_stats ? data.voter_stats[v] : null;
                 const stat = vs ? `<span class="bfd-chip-stat">${pct(vs.bfd_fraction)} BFD &middot; ${pct(vs.agreement)} with ensemble</span>` : '';
-                return `<span class="bfd-voter-chip">${data.voter_labels[v]}${stat}</span>`;
+                // Only separation methods draw a baseflow curve; RF-BFD and the
+                // flatness rule are classifiers with nothing to show or hide.
+                const hasCurve = data.baseflow && data.baseflow[v];
+                const box = hasCurve
+                    ? `<input type="checkbox" ${bfdHiddenCurves.has(v) ? '' : 'checked'} onchange="bfdToggleCurve('${v}', this.checked)" title="Show ${data.voter_labels[v]} baseflow curve on the hydrograph" style="margin-right:4px;cursor:pointer;accent-color:${BFD_METHOD_COLORS[v] || '#888'}">`
+                    : '';
+                return `<span class="bfd-voter-chip"><label style="cursor:${hasCurve ? 'pointer' : 'default'}">${box}${data.voter_labels[v]}</label>${stat}</span>`;
             }).join('');
             const missingPybfs = !data.voters.includes('pybfs');
 
@@ -1550,14 +1576,14 @@
                 </div>
                 <div class="bfd-param-row">
                     <div class="bfd-param">
-                        <div class="bfd-param-label"><span>Low-flow anchor</span><span class="bfd-param-value" id="bfd-val-anchor-low">${pctile(bfdParams.low_flow_anchor)}</span></div>
-                        <input type="range" min="0" max="0.9" step="0.01" value="${bfdParams.low_flow_anchor}"
-                            oninput="bfdParamChanged('${siteNo}', 'low_flow_anchor', parseFloat(this.value), 'bfd-val-anchor-low', v => 'P' + Math.round(v*100))">
-                    </div>
-                    <div class="bfd-param">
                         <div class="bfd-param-label"><span>High-flow anchor</span><span class="bfd-param-value" id="bfd-val-anchor-high">${pctile(bfdParams.high_flow_anchor)}</span></div>
                         <input type="range" min="0.1" max="1" step="0.01" value="${bfdParams.high_flow_anchor}"
                             oninput="bfdParamChanged('${siteNo}', 'high_flow_anchor', parseFloat(this.value), 'bfd-val-anchor-high', v => 'P' + Math.round(v*100))">
+                    </div>
+                    <div class="bfd-param">
+                        <div class="bfd-param-label"><span>Low-flow anchor</span><span class="bfd-param-value" id="bfd-val-anchor-low">${pctile(bfdParams.low_flow_anchor)}</span></div>
+                        <input type="range" min="0" max="0.9" step="0.01" value="${bfdParams.low_flow_anchor}"
+                            oninput="bfdParamChanged('${siteNo}', 'low_flow_anchor', parseFloat(this.value), 'bfd-val-anchor-low', v => 'P' + Math.round(v*100))">
                     </div>
                 </div>
                 <div class="bfd-param-row">
@@ -1617,7 +1643,7 @@
                 <div class="skill-metric-card" style="border-left-color:#8e24aa">
                     <div class="skill-metric-label">Pooled Events</div>
                     <div class="skill-metric-value">${data.stats.n_events}</div>
-                    <div class="skill-metric-sub">${data.stats.mean_event_duration !== null ? 'mean duration ' + data.stats.mean_event_duration + ' days' : 'none found'}</div>
+                    <div class="skill-metric-sub" id="bfd-events-sub">${data.stats.mean_event_duration !== null ? 'mean duration ' + data.stats.mean_event_duration + ' days' : 'none found'}</div>
                 </div>
             `;
             html += '</div>';
@@ -1626,7 +1652,21 @@
                 html += `<div style="font-size:11px;color:#999;margin-bottom:8px">Showing ${data.dates.length.toLocaleString()} of ${data.total_points.toLocaleString()} days (downsampled for display; stats above use the full record).</div>`;
             }
 
-            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Scroll to zoom &mdash; the voter strip follows')}
+            bfdData = data;
+            const dMin = data.dates[0], dMax = data.dates[data.dates.length - 1];
+            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Scroll or drag to zoom &mdash; the voter strip and skill events follow')}
+                     <div class="bfd-focus">
+                        <b>Focus period</b>
+                        <input type="date" id="bfd-focus-start" min="${dMin}" max="${dMax}" value="${bfdFocus ? bfdFocus[0] : dMin}" onchange="bfdFocusInput()">
+                        <span>&ndash;</span>
+                        <input type="date" id="bfd-focus-end" min="${dMin}" max="${dMax}" value="${bfdFocus ? bfdFocus[1] : dMax}" onchange="bfdFocusInput()">
+                        <button onclick="bfdFocusShift(-1)" title="Previous period of the same length">&larr;</button>
+                        <button onclick="bfdFocusShift(1)" title="Next period of the same length">&rarr;</button>
+                        <button onclick="bfdFocusYears(1)">1 yr</button>
+                        <button onclick="bfdFocusYears(5)">5 yr</button>
+                        <button onclick="bfdFocusReset()">Full record</button>
+                        <span class="bfd-focus-info" id="bfd-focus-info"></span>
+                     </div>
                      <div class="plot-div" id="plot-bfd"></div>
                      <div class="bfd-legend">
                         <span><i style="background:#1a73e8"></i>method calls BFD</span>
@@ -1635,15 +1675,62 @@
                         <span><i style="background:rgba(142,36,170,0.12);border:1px solid #e1bee7"></i>pooled event</span>
                      </div>`;
 
+            if (bfdCalibrated) {
+                html += `<div id="bfd-skill-container" style="margin-top:16px">${
+                    bfdSkillOn ? '' : `<button class="action-btn btn-skill" style="width:100%" onclick="loadBfdSkill('${siteNo}')">Evaluate Forecast Skill on These Events</button>`
+                }</div>`;
+            }
+
             container.innerHTML = html;
-            setTimeout(() => renderBfdChart(data), 0);
+            setTimeout(() => { renderBfdChart(data); bfdFocusUpdated(false); }, 0);
+            if (bfdSkillOn && bfdCalibrated) loadBfdSkill(siteNo);
+        }
+
+        // PyBFS forecast skill over the pooled events above. Once switched on it
+        // follows the sliders: each change re-pools the events and re-scores them.
+        async function loadBfdSkill(siteNo) {
+            bfdSkillOn = true;
+            const box = document.getElementById('bfd-skill-container');
+            if (!box) return;
+            const mySeq = ++bfdSkillSeq;
+            box.innerHTML = '<div class="loading"><span class="spinner"></span> Forecasting each pooled event (new events are cached after their first run)...</div>';
+            let data;
+            try {
+                const qs = new URLSearchParams(bfdParams).toString();
+                const resp = await fetch(`/api/gage/${siteNo}/bfd_ensemble_skill?${qs}`);
+                data = await resp.json();
+            } catch (e) {
+                data = { error: e.message };
+            }
+            if (mySeq !== bfdSkillSeq || !document.getElementById('bfd-skill-container')) return;
+            if (data.error) {
+                box.innerHTML = `<div class="error-msg">${data.error}</div>`;
+                return;
+            }
+            bfdSkillData = data;
+            bfdSkillSite = siteNo;
+            box.innerHTML = '<div id="bfd-skill-body"></div>';
+            renderBfdSkillView();
         }
 
         function renderBfdChart(data) {
+            // Which pooled event (if any) covers each displayed day.
+            const eventIdxByDay = {};
+            data.events.forEach((ev, k) => {
+                data.dates.forEach((d, i) => { if (d >= ev.start_date && d <= ev.end_date) eventIdxByDay[i] = k; });
+            });
             const customdata = data.dates.map((d, i) => {
                 const parts = data.voters.map(v => `${data.voter_labels[v]} ${data.labels[v][i] ? '✓' : '✗'}`);
                 const nVote = data.voters.reduce((s, v) => s + data.labels[v][i], 0);
+                if (data.zero_flow && data.zero_flow[i]) parts.push('<b>Zero flow &mdash; cannot be BFD, so every voter and the ensemble are forced to "not BFD"</b>');
                 if (data.threshold) parts.push(`<i>threshold here: ${Math.round(data.threshold[i] * 100)}%</i>`);
+                const evi = eventIdxByDay[i];
+                if (evi !== undefined) {
+                    const ev = data.events[evi];
+                    parts.push(`<br><b>Event E${evi + 1}</b>: ${ev.start_date} &rarr; ${ev.end_date}`);
+                    parts.push(`${ev.duration} days (${ev.n_bfd_days} ensemble-BFD, ${ev.gap_days} gap) &middot; mean Q ${ev.mean_q} cfs`);
+                    parts.push('Voted BFD on: ' + data.voters.map(v => `${data.voter_labels[v]} ${ev.voter_days ? ev.voter_days[v] : '?'}/${ev.duration}`).join(', '));
+                }
                 parts.push(`<b>${nVote}/${data.voters.length} voted BFD → Ensemble: ${data.ensemble[i] ? 'BFD' : 'not BFD'}</b>`);
                 return parts.join('<br>');
             });
@@ -1665,7 +1752,8 @@
             const bfTraces = data.voters.filter(m => (data.baseflow || {})[m]).map(m => ({
                 x: data.dates, y: data.baseflow[m], mode: 'lines',
                 line: { color: BFD_METHOD_COLORS[m] || '#888', width: 1 },
-                name: data.voter_labels[m] || m,
+                name: data.voter_labels[m] || m, meta: m,
+                visible: bfdHiddenCurves.has(m) ? 'legendonly' : true,
                 hovertemplate: `%{x}<br>${data.voter_labels[m] || m} baseflow: %{y:.2f} cfs<extra></extra>`,
                 xaxis: 'x', yaxis: 'y',
             }));
@@ -1721,27 +1809,41 @@
             const stripFrac = Math.min(0.45, stripPx / plotPx);
             const hydroBottom = stripFrac + 0.07;
 
-            // Event bands stay inside the hydrograph so they can't tint the strip.
-            const eventShapes = data.events.map(ev => ({
-                type: 'rect', xref: 'x', x0: ev.start_date, x1: ev.end_date,
-                yref: 'y domain', y0: 0, y1: 1,
-                fillcolor: 'rgba(142,36,170,0.12)', line: { width: 0 },
-            }));
+            // Event bands are hoverable traces (not layout shapes, which can't carry
+            // hover text) on a hidden 0-1 overlay axis, so a band spans the plot
+            // height whatever the flow scale and its card shows on hover anywhere
+            // inside it, not just near the flow line.
+            const bandTraces = data.events.map((ev, k) => {
+                const rows = data.voters
+                    .map(v => ({ v, n: ev.voter_days ? ev.voter_days[v] : 0 }))
+                    .sort((a, b) => b.n - a.n)
+                    .map(r => `${r.n / ev.duration >= 0.5 ? '\u2713' : '\u2717'} ${data.voter_labels[r.v]}: ${r.n}/${ev.duration} days`);
+                const text = [`<b>Event E${k + 1}</b>  ${ev.start_date} \u2192 ${ev.end_date}`,
+                    `${ev.duration} days: ${ev.n_bfd_days} ensemble-BFD, ${ev.gap_days} bridged gap`,
+                    `mean Q ${ev.mean_q} cfs`, '<b>Voters (days called BFD):</b>'].concat(rows).join('<br>');
+                return {
+                    x: [ev.start_date, ev.end_date, ev.end_date, ev.start_date, ev.start_date],
+                    y: [0, 0, 1, 1, 0], xaxis: 'x', yaxis: 'y3', type: 'scatter', mode: 'lines',
+                    fill: 'toself', hoveron: 'fills', line: { width: 0 },
+                    fillcolor: 'rgba(142,36,170,0.12)', text: text, hoverinfo: 'text',
+                    showlegend: false, name: `E${k + 1}`,
+                };
+            });
 
-            renderChart('plot-bfd', [qTrace].concat(bfTraces, [strip]), {
+            renderChart('plot-bfd', [qTrace].concat(bfTraces, bandTraces, [strip]), {
                 height: height,
                 margin: { l: 95, r: 20, t: marginT, b: marginB },
-                xaxis: { type: 'date', anchor: 'y2' },
-                yaxis: {
+                xaxis: Object.assign({ type: 'date', anchor: 'y2' }, bfdFocus ? { range: bfdFocus } : {}),
+                yaxis: Object.assign({
                     title: { text: 'Streamflow (cfs)', font: { size: 11 } },
                     domain: [hydroBottom, 1], rangemode: 'tozero',
-                },
+                }, bfdFocus ? { range: bfdYRange(data, bfdFocus) } : {}),
                 yaxis2: {
                     domain: [0, stripFrac], anchor: 'x', type: 'category',
                     tickfont: { size: 10 }, showgrid: false, zeroline: false,
                     fixedrange: true,
                 },
-                shapes: eventShapes,
+                yaxis3: { domain: [hydroBottom, 1], range: [0, 1], overlaying: 'y', visible: false, fixedrange: true },
                 hovermode: 'closest',
                 showlegend: true,
                 legend: {
@@ -1751,12 +1853,152 @@
                 plot_bgcolor: '#fff', paper_bgcolor: '#fff',
                 font: { family: 'Inter,sans-serif', size: 11 },
             });
+
+            // Scroll/drag zoom is a focus change too: mirror it into the date
+            // inputs, rescale y to what's visible, and re-filter skill events.
+            // Legend clicks and the checkboxes toggle the same curves; keep them in step.
+            document.getElementById('plot-bfd').on('plotly_restyle', () => {
+                const gd = document.getElementById('plot-bfd');
+                gd.data.forEach(t => {
+                    if (!t.meta) return;
+                    if (t.visible === 'legendonly') bfdHiddenCurves.add(t.meta); else bfdHiddenCurves.delete(t.meta);
+                    const cb = document.querySelector(`.bfd-voter-chip input[onchange*="'${t.meta}'"]`);
+                    if (cb) cb.checked = t.visible !== 'legendonly';
+                });
+            });
+
+            document.getElementById('plot-bfd').on('plotly_relayout', (ev) => {
+                if (ev['xaxis.autorange']) {
+                    bfdFocus = null;
+                    Plotly.relayout('plot-bfd', { 'yaxis.autorange': true });
+                } else if (ev['xaxis.range[0]'] !== undefined) {
+                    bfdFocus = [String(ev['xaxis.range[0]']).slice(0, 10), String(ev['xaxis.range[1]']).slice(0, 10)];
+                    Plotly.relayout('plot-bfd', { 'yaxis.range': bfdYRange(bfdData, bfdFocus) });
+                } else {
+                    return;   // y-only change (our own rescale)
+                }
+                bfdFocusUpdated(true);
+            });
+        }
+
+        function bfdToggleCurve(method, on) {
+            const gd = document.getElementById('plot-bfd');
+            const i = gd.data.findIndex(t => t.meta === method);
+            if (i >= 0) Plotly.restyle(gd, { visible: on ? true : 'legendonly' }, [i]);
+        }
+
+        // y range fitting the flow visible in [a, b]
+        function bfdYRange(data, focus) {
+            let mx = 0;
+            data.dates.forEach((d, i) => {
+                if (d >= focus[0] && d <= focus[1] && data.q[i] !== null && data.q[i] > mx) mx = data.q[i];
+            });
+            return [0, (mx || 1) * 1.08];
+        }
+
+        function bfdSetFocus(a, b) {
+            const dMin = bfdData.dates[0], dMax = bfdData.dates[bfdData.dates.length - 1];
+            if (a < dMin) a = dMin;
+            if (b > dMax) b = dMax;
+            if (!(a < b)) return;
+            bfdFocus = [a, b];
+            Plotly.relayout('plot-bfd', { 'xaxis.range': bfdFocus, 'yaxis.range': bfdYRange(bfdData, bfdFocus) });
+            bfdFocusUpdated(true);
+        }
+
+        function bfdFocusInput() {
+            bfdSetFocus(document.getElementById('bfd-focus-start').value, document.getElementById('bfd-focus-end').value);
+        }
+
+        function bfdFocusShift(dir) {
+            const f = bfdFocus || [bfdData.dates[0], bfdData.dates[bfdData.dates.length - 1]];
+            const a = new Date(f[0]), b = new Date(f[1]);
+            const span = b - a;
+            const iso = (t) => new Date(t).toISOString().slice(0, 10);
+            let na = a.getTime() + dir * span, nb = b.getTime() + dir * span;
+            const dMin = new Date(bfdData.dates[0]).getTime(), dMax = new Date(bfdData.dates[bfdData.dates.length - 1]).getTime();
+            if (na < dMin) { nb += dMin - na; na = dMin; }
+            if (nb > dMax) { na -= nb - dMax; nb = dMax; }
+            bfdSetFocus(iso(Math.max(na, dMin)), iso(nb));
+        }
+
+        // Window of n years starting at the current focus start (or the record start)
+        function bfdFocusYears(n) {
+            const start = new Date(bfdFocus ? bfdFocus[0] : bfdData.dates[0]);
+            const end = new Date(start);
+            end.setFullYear(end.getFullYear() + n);
+            bfdSetFocus(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10));
+        }
+
+        function bfdFocusReset() {
+            bfdFocus = null;
+            Plotly.relayout('plot-bfd', { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            bfdFocusUpdated(true);
+        }
+
+        // Sync the date inputs / info text / skill panel with bfdFocus.
+        function bfdFocusUpdated(refreshSkill) {
+            const dMin = bfdData.dates[0], dMax = bfdData.dates[bfdData.dates.length - 1];
+            const f = bfdFocus || [dMin, dMax];
+            const si = document.getElementById('bfd-focus-start'), ei = document.getElementById('bfd-focus-end');
+            if (si) si.value = f[0] < dMin ? dMin : f[0];
+            if (ei) ei.value = f[1] > dMax ? dMax : f[1];
+            const inWin = bfdData.events.filter(e => e.end_date >= f[0] && e.start_date <= f[1]).length;
+            const info = document.getElementById('bfd-focus-info');
+            if (info) info.textContent = bfdFocus ? `${inWin} of ${bfdData.events.length} events in view` : '';
+            if (refreshSkill && bfdSkillData) {
+                clearTimeout(bfdFocusTimer);
+                bfdFocusTimer = setTimeout(renderBfdSkillView, 200);
+            }
+        }
+
+        // Restrict a full-record skill response to the focus window: keep events that
+        // overlap it, renumber them, slice the daily arrays, and redo the pooled metrics.
+        function skillFocused(data, focus) {
+            if (!focus) return data;
+            const fc = data.forecast;
+            const kept = fc.summary.filter(e => e.end_date >= focus[0] && e.start_date <= focus[1]);
+            const remap = new Map(kept.map((e, i) => [e.seq, i + 1]));
+            let lo = focus[0], hi = focus[1];
+            kept.forEach(e => { if (e.start_date < lo) lo = e.start_date; if (e.end_date > hi) hi = e.end_date; });
+            const idx = [];
+            fc.dates.forEach((d, i) => { if (d >= lo && d <= hi) idx.push(i); });
+            const pick = (arr) => idx.map(i => arr[i]);
+            const seq = pick(fc.seq).map(v => (v === null || !remap.has(Math.round(v))) ? null : remap.get(Math.round(v)));
+            const res = pick(fc.residuals);
+            const rv = res.filter((v, i) => seq[i] !== null && v !== null && !isNaN(v));
+            const r4 = (v) => Math.round(v * 1e4) / 1e4;
+            return {
+                separation: null,
+                forecast: {
+                    overall_rmse: rv.length ? r4(Math.sqrt(rv.reduce((a, v) => a + v * v, 0) / rv.length)) : null,
+                    overall_mae: rv.length ? r4(rv.reduce((a, v) => a + Math.abs(v), 0) / rv.length) : null,
+                    n_sequences: kept.length,
+                    dates: pick(fc.dates), q: pick(fc.q), fc: pick(fc.fc), residuals: res, seq,
+                    summary: kept.map(e => Object.assign({}, e, { seq: remap.get(e.seq) })),
+                },
+            };
+        }
+
+        function renderBfdSkillView() {
+            const body = document.getElementById('bfd-skill-body');
+            if (!body || !bfdSkillData) return;
+            const view = skillFocused(bfdSkillData, bfdFocus);
+            forecastModalData = view;
+            renderStrictSkill(bfdSkillSite, view, {
+                bodyId: 'bfd-skill-body', plotSuffix: '-bfd', noun: 'event', noAutoModal: true,
+                emptyMsg: bfdFocus ? 'No pooled events in the focus period.' : 'No pooled events to forecast. Loosen d<sub>min</sub> or the threshold to get some.',
+            });
         }
 
         // ===== Skill Assessment =====
         let skillStrictData = null;  // cached strict skill data for toggle
 
-        function renderStrictSkill(siteNo, data) {
+        function renderStrictSkill(siteNo, data, opts = {}) {
+            const bodyId = opts.bodyId || 'skill-view-body';
+            const sfx = opts.plotSuffix || '';
+            const noun = opts.noun || 'sequence';
+            fcNoun = noun;
             const sep = data.separation;
             const fc = data.forecast;
             const fmtVal = (v, digits=4) => v !== null && v !== undefined ? v.toFixed(digits) : 'N/A';
@@ -1782,35 +2024,35 @@
                 <div class="skill-metric-card forecast">
                     <div class="skill-metric-label">Forecast RMSE</div>
                     <div class="skill-metric-value">${fmtVal(fc.overall_rmse)} m³/s</div>
-                    <div class="skill-metric-sub">${fc.n_sequences} qualifying sequence${fc.n_sequences !== 1 ? 's' : ''}</div>
+                    <div class="skill-metric-sub">${fc.n_sequences} qualifying ${noun}${fc.n_sequences !== 1 ? 's' : ''}</div>
                 </div>
                 <div class="skill-metric-card forecast">
                     <div class="skill-metric-label">Forecast MAE</div>
                     <div class="skill-metric-value">${fmtVal(fc.overall_mae)} m³/s</div>
-                    <div class="skill-metric-sub">Across all baseflow sequences</div>
+                    <div class="skill-metric-sub">Across all baseflow ${noun}s</div>
                 </div>
             `;
             html += '</div>';
 
             if (sep) {
                 html += '<div class="skill-section-title">Separation Residuals (Baseflow-Dominated Days)</div>';
-                html += `${plotHeader('Q \u2212 BF\u2099\u1d0f\u02e2 on Strict-Baseflow Days', 'plot-skill-sep', 'Scroll to zoom, drag to pan')}
-                         <div class="plot-div" id="plot-skill-sep"></div>`;
+                html += `${plotHeader('Q \u2212 BF\u2099\u1d0f\u02e2 on Strict-Baseflow Days', 'plot-skill-sep' + sfx, 'Scroll to zoom, drag to pan')}
+                         <div class="plot-div" id="plot-skill-sep${sfx}"></div>`;
             }
 
             if (fc.n_sequences > 0) {
-                html += '<div class="skill-section-title">Forecast Skill by Sequence</div>';
+                html += `<div class="skill-section-title">Forecast Skill by ${noun.charAt(0).toUpperCase() + noun.slice(1)}</div>`;
                 html += `<button class="action-btn btn-skill" style="width:100%;margin-bottom:10px;font-size:12px;padding:8px"
                             onclick="openForecastModal(forecastModalData, 0)">
-                            &#9654; View Hydrograph Sequences
+                            &#9654; View Hydrograph ${noun.charAt(0).toUpperCase() + noun.slice(1)}s
                          </button>`;
-                html += `${plotHeader('Per-Sequence RMSE & MAE', 'plot-skill-fc', '')}
-                         <div class="plot-div" id="plot-skill-fc"></div>`;
+                html += `${plotHeader('Per-${noun.charAt(0).toUpperCase() + noun.slice(1)} RMSE & MAE', 'plot-skill-fc' + sfx, '')}
+                         <div class="plot-div" id="plot-skill-fc${sfx}"></div>`;
             } else {
-                html += '<div class="skill-no-seqs">No qualifying baseflow sequences found for forecast skill evaluation (need \u2265 30 consecutive baseflow-dominated days).</div>';
+                html += `<div class="skill-no-seqs">${opts.emptyMsg || 'No qualifying baseflow sequences found for forecast skill evaluation (need \u2265 30 consecutive baseflow-dominated days).'}</div>`;
             }
 
-            document.getElementById('skill-view-body').innerHTML = html;
+            document.getElementById(bodyId).innerHTML = html;
 
             setTimeout(() => {
                 if (sep) {
@@ -1824,7 +2066,7 @@
                         marker: { color: '#00897b', size: 4, opacity: 0.7 },
                         name: 'Residual (Q − BF)', hovertemplate: '%{x}<br>%{y:.4f} m³/s<extra></extra>' };
 
-                    renderChart('plot-skill-sep', [zeroLine, resSeries], {
+                    renderChart('plot-skill-sep' + sfx, [zeroLine, resSeries], {
                         margin: { l: 60, r: 20, t: 10, b: 50 },
                         xaxis: { type: 'date', rangeslider: { visible: true, thickness: 0.06 } },
                         yaxis: { title: { text: 'Residual (m³/s)', font: { size: 11 } }, zeroline: false },
@@ -1835,7 +2077,7 @@
                 }
 
                 if (fc.n_sequences > 0) {
-                    const seqLabels = fc.summary.map(s => `Seq ${s.seq} (${s.len}d)`);
+                    const seqLabels = fc.summary.map(s => `${noun === 'event' ? 'Ev' : 'Seq'} ${s.seq} (${s.len}d)`);
                     const rmseVals = fc.summary.map(s => s.rmse);
                     const maeVals = fc.summary.map(s => s.mae);
                     const hoverTexts = fc.summary.map(s => `${s.start_date} — ${s.end_date}`);
@@ -1847,7 +2089,7 @@
                         marker: { color: '#9fa8da' }, text: hoverTexts, customdata: hoverTexts,
                         hovertemplate: '<b>%{x}</b><br>%{customdata}<br>MAE: %{y:.4f} m³/s<extra></extra>' };
 
-                    renderChart('plot-skill-fc', [rmseBar, maeBar], {
+                    renderChart('plot-skill-fc' + sfx, [rmseBar, maeBar], {
                         barmode: 'group',
                         margin: { l: 60, r: 20, t: 10, b: 80 },
                         xaxis: { tickangle: -30 },
@@ -1858,7 +2100,7 @@
                     });
                 }
 
-                if (fc.n_sequences > 0) {
+                if (fc.n_sequences > 0 && !opts.noAutoModal) {
                     openForecastModal(data, 0);
                 }
             }, 50);
@@ -2294,8 +2536,9 @@
             const rmseStr = seq.rmse !== null ? seq.rmse.toFixed(4) : 'N/A';
             const maeStr  = seq.mae  !== null ? seq.mae.toFixed(4)  : 'N/A';
             document.getElementById('fc-modal-info').innerHTML = `
-                <div class="fc-seq-label">Sequence ${seq.seq} <span style="font-weight:400;color:#aaa">of ${n}</span></div>
+                <div class="fc-seq-label">${fcNoun.charAt(0).toUpperCase() + fcNoun.slice(1)} ${seq.seq} <span style="font-weight:400;color:#aaa">of ${n}</span></div>
                 <div class="fc-seq-meta">${seq.start_date} &mdash; ${seq.end_date} &nbsp;&middot;&nbsp; ${seq.len} days</div>
+                ${seq.meta ? `<div class="fc-seq-meta">${seq.meta.voters.map(r => `${r.days / seq.meta.duration >= 0.5 ? '\u2713' : '\u2717'} ${r.label} ${r.days}/${seq.meta.duration}`).join(' &nbsp;&middot;&nbsp; ')}</div>` : ''}
                 <div class="fc-seq-metrics">
                     <span class="fc-seq-metric">RMSE: <b>${rmseStr} m&sup3;/s</b></span>
                     <span class="fc-seq-metric">MAE: <b>${maeStr} m&sup3;/s</b></span>
@@ -2311,13 +2554,13 @@
             const minR  = rmses.length ? Math.min(...rmses) : 0;
             const maxR  = rmses.length ? Math.max(...rmses) : 1;
             const strip = document.getElementById('fc-nav-strip');
-            let html = '<span class="fc-strip-label">SEQUENCES</span>';
+            let html = `<span class="fc-strip-label">${fcNoun.toUpperCase()}S</span>`;
             fc.summary.forEach((s, i) => {
                 const bg  = rmseToColor(s.rmse, minR, maxR, 1);
-                const tip = `Seq ${s.seq}: ${s.start_date} — ${s.end_date}\n${s.len} days · RMSE ${s.rmse !== null ? s.rmse.toFixed(4) : 'N/A'} m³/s`;
+                const tip = `${fcNoun === 'event' ? 'Event' : 'Seq'} ${s.seq}: ${s.start_date} — ${s.end_date}\n${s.len} days · RMSE ${s.rmse !== null ? s.rmse.toFixed(4) : 'N/A'} m³/s${fcEventMeta(s).length ? '\n' + fcEventMeta(s).join('\n') : ''}`;
                 html += `<div class="fc-seq-pill${i === seqIdx ? ' active' : ''}"
                               style="background:${bg}" onclick="gotoSequence(${i})"
-                              title="${tip}">S${s.seq} &middot; ${s.len}d</div>`;
+                              title="${tip}">${fcNoun === 'event' ? 'E' : 'S'}${s.seq} &middot; ${s.len}d</div>`;
             });
             strip.innerHTML = html;
             const active = strip.querySelector('.active');
@@ -2348,8 +2591,8 @@
                     y: [0, 0, qMax, qMax, 0],
                     fill: 'toself', fillcolor: fill, mode: 'lines',
                     line: { color: line, width: isActive ? 1.5 : 0.5 },
-                    name: `S${s.seq}`, showlegend: false,
-                    hovertemplate: `<b>Seq ${s.seq}</b><br>${s.start_date} — ${s.end_date}<br>${s.len} days · RMSE ${rmseLabel} m³/s<br><i>Click to focus</i><extra></extra>`,
+                    name: `${fcNoun === 'event' ? 'E' : 'S'}${s.seq}`, showlegend: false,
+                    hovertemplate: `<b>${fcNoun === 'event' ? 'Event' : 'Seq'} ${s.seq}</b><br>${s.start_date} — ${s.end_date}<br>${s.len} days · RMSE ${rmseLabel} m³/s<br>${fcEventMeta(s).join('<br>')}${fcEventMeta(s).length ? '<br>' : ''}<i>Click to focus</i><extra></extra>`,
                     customdata: Array(5).fill(i),
                 });
             });
@@ -2369,7 +2612,7 @@
 
             const annotations = fc.summary.map((s, i) => ({
                 x: s.start_date, y: 1, yref: 'paper',
-                text: `S${s.seq}`, showarrow: false,
+                text: `${fcNoun === 'event' ? 'E' : 'S'}${s.seq}`, showarrow: false,
                 xanchor: 'left', yanchor: 'top',
                 font: { size: 9, color: i === seqIdx ? '#1565C0' : '#BDBDBD' },
             }));
@@ -2419,7 +2662,7 @@
                   name: 'Observed Q', mode: 'lines', line: { color: '#546E7A', width: 1 } },
                 { x: seqDates, y: seqFcVals, name: 'Model Prediction', mode: 'lines',
                   line: { color: '#5c6bc0', width: 2, dash: 'dash' } },
-                { x: seqDates, y: seqQ, name: 'Active sequence', mode: 'lines',
+                { x: seqDates, y: seqQ, name: `Active ${fcNoun}`, mode: 'lines',
                   line: { color: '#2196F3', width: 2.5 } },
             ];
             Plotly.react('fc-modal-hyd', traces, {
@@ -2472,8 +2715,22 @@
             }, { ...plotlyConfig, responsive: false });
         }
 
+        // Voter breakdown lines for an ensemble event (empty for strict/ML sequences)
+        function fcEventMeta(s) {
+            const m = s.meta;
+            if (!m) return [];
+            return [`${m.duration} days: ${m.n_bfd_days} ensemble-BFD, ${m.gap_days} bridged gap \u00b7 mean Q ${m.mean_q} cfs`,
+                    'Voters (days called BFD):']
+                .concat(m.voters.map(r => `${r.days / m.duration >= 0.5 ? '\u2713' : '\u2717'} ${r.label}: ${r.days}/${m.duration}`));
+        }
+
         function openForecastModal(skillData, seqIdx) {
             forecastModalData = skillData;
+            const N = fcNoun.charAt(0).toUpperCase() + fcNoun.slice(1);
+            document.getElementById('fc-overview-label').innerHTML = `Full Hydrograph &mdash; click a highlighted ${fcNoun} to focus`;
+            document.getElementById('fc-zoom-label').textContent = `Zoomed to ${fcNoun}`;
+            document.getElementById('fc-nav-prev').title = `Previous ${fcNoun} (\u2190)`;
+            document.getElementById('fc-nav-next').title = `Next ${fcNoun} (\u2192)`;
             currentSeqIdx = seqIdx;
             overviewClickBound = false;
             document.getElementById('forecast-modal').classList.add('active');

@@ -35,8 +35,10 @@ from bfd_db.labeling.ensemble import (
     apply_flatness_override,
     effective_threshold,
     flatness_vote,
+    force_not_bfd,
     label_from_ratio,
     voter_agreement_stats,
+    zero_flow_mask,
 )
 from bfd_db.events.pooling import pool_events
 
@@ -153,6 +155,11 @@ def apply_params(
     if "qb_pybfs" in raw.columns:
         labels["pybfs"] = label_from_ratio(raw["qb_pybfs"], raw["Q"], t_eff)
 
+    # No flow, no baseflow-dominance: same rule as label_gage_all_methods()
+    # (see docs/adaptive-bfd-threshold.md §5.1 in us_baseflow_db).
+    zero_flow = zero_flow_mask(raw["Q"])
+    labels = labels.apply(lambda col: force_not_bfd(col, zero_flow))
+
     vote_frac = labels.mean(axis=1)
     ensemble = (vote_frac >= voting_fraction).astype(int)
 
@@ -163,8 +170,10 @@ def apply_params(
     # override, so it never feeds back into vote_frac above.
     if use_flatness_vote:
         flatness = flatness_vote(raw["Q"], flatness_window, flatness_cv_threshold)
+        flatness = force_not_bfd(flatness, zero_flow)
         labels["flatness"] = flatness
         ensemble = apply_flatness_override(ensemble, flatness)
+    ensemble = force_not_bfd(ensemble, zero_flow)
 
     events = pool_events(ensemble, t_c=t_c, d_min=d_min)
 
@@ -214,6 +223,7 @@ def apply_params(
         "voter_labels": {v: VOTER_LABELS[v] for v in voters},
         "labels": {v: labels_ds[v].astype(int).tolist() for v in voters},
         "vote_fraction": vote_frac_ds.round(3).tolist(),
+        "zero_flow": zero_flow.loc[idx].astype(int).tolist(),
         "ensemble": ensemble_ds.astype(int).tolist(),
         "voter_stats": voter_stats,
         "total_points": total_points,
@@ -224,6 +234,14 @@ def apply_params(
                 "duration": int(row.duration),
                 "n_bfd_days": int(row.n_bfd_days),
                 "gap_days": int(row.gap_days),
+                # Days inside the event each voter called BFD (full-resolution
+                # labels), for the hover card; the ensemble's own count is
+                # n_bfd_days above.
+                "voter_days": {
+                    v: int(labels[v].loc[row.start_date:row.end_date].sum())
+                    for v in voters
+                },
+                "mean_q": round(float(raw["Q"].loc[row.start_date:row.end_date].mean()), 3),
             }
             for row in events.itertuples()
         ],
@@ -231,6 +249,7 @@ def apply_params(
             "n_days": len(raw),
             "bfd_fraction": round(float(ensemble.mean()), 4),
             "n_events": len(events),
+            "zero_flow_days": int(zero_flow.sum()),
             "mean_event_duration": round(float(events["duration"].mean()), 1) if len(events) else None,
         },
     }

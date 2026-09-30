@@ -1426,18 +1426,10 @@ def compute_bfd_ml_skill_assessment(site_no, sf_dir=None, p_dir=None):
         bf_mask = np.array([bool(pred_map.get(d, False)) for d in m3_dates])
 
     m3_df = m3_df.reset_index(drop=True)
-    dates = pd.to_datetime(m3_df['Date'].values)
-    Q = np.array(m3_df['Streamflow'], dtype=float)
     n = len(m3_df)
 
-    min_days, max_days, train_days = 30, 90, 365
-
-    skill_df = pd.DataFrame({
-        'Date': dates, 'Q': Q, 'BF': bf_mask,
-        'SEQ': np.nan, 'FC': np.nan, 'RES': np.nan,
-    })
-
     # Find contiguous BFD sequences
+    min_days = 30
     sequences = []
     i = 0
     while i < n:
@@ -1446,14 +1438,35 @@ def compute_bfd_ml_skill_assessment(site_no, sf_dir=None, p_dir=None):
             while j < n and bf_mask[j]:
                 j += 1
             if (j - i) >= min_days:
-                sequences.append((i, j - 1))
+                sequences.append((i, j - 1, None))
             i = j
         else:
             i += 1
 
+    return _forecast_skill_for_sequences(m3_df, SBT, basin_char, gw_hyd, flow, sequences, bf_mask)
+
+
+def _forecast_skill_for_sequences(m3_df, SBT, basin_char, gw_hyd, flow, sequences, bf_mask,
+                                  max_days=90, train_days=365, fc_cache=None):
+    """PyBFS forecast skill over given baseflow-dominant sequences.
+
+    sequences: list of (start_idx, end_idx, sat) with inclusive indices into m3_df; sat is the
+    fraction of BFD days in the sequence, or None to derive it from bf_mask.
+    fc_cache: optional dict; a forecast depends only on (start date, length) for a fixed gage
+    record and calibration, so callers that re-run with tweaked events can reuse it.
+    Returns the JSON-ready structure shared by all skill endpoints (separation is None).
+    """
+    dates = pd.to_datetime(m3_df['Date'].values)
+    Q = np.array(m3_df['Streamflow'], dtype=float)
+
+    skill_df = pd.DataFrame({
+        'Date': dates, 'Q': Q, 'BF': bf_mask,
+        'SEQ': np.nan, 'FC': np.nan, 'RES': np.nan,
+    })
+
     summary_rows = []
     seq_num = 0
-    for (start_idx, end_idx) in sequences:
+    for (start_idx, end_idx, seq_sat) in sequences:
         seq_num += 1
         seq_len = min(end_idx - start_idx + 1, max_days)
         actual_end = start_idx + seq_len - 1
@@ -1467,17 +1480,22 @@ def compute_bfd_ml_skill_assessment(site_no, sf_dir=None, p_dir=None):
             seq_num -= 1
             continue
 
-        train_bfs = pybfs.bfs(train_slice, SBT, basin_char, gw_hyd, flow)
-        last = train_bfs.iloc[-1]
-        ini = (
-            last['X'], last['Zb.L'], last['Zs.L'],
-            last['StBase'], last['StSur'],
-            last['SurfaceFlow'], last['Baseflow'], last['Rech'],
-        )
+        cache_key = (dates[start_idx], seq_len)
+        fc_values = fc_cache.get(cache_key) if fc_cache is not None else None
+        if fc_values is None:
+            train_bfs = pybfs.bfs(train_slice, SBT, basin_char, gw_hyd, flow)
+            last = train_bfs.iloc[-1]
+            ini = (
+                last['X'], last['Zb.L'], last['Zs.L'],
+                last['StBase'], last['StSur'],
+                last['SurfaceFlow'], last['Baseflow'], last['Rech'],
+            )
 
-        fc_input = pd.DataFrame({'date': dates[start_idx:start_idx+seq_len], 'streamflow': np.nan})
-        fc_result = pybfs.forecast(fc_input, SBT, basin_char, gw_hyd, flow, ini)
-        fc_values = fc_result['Baseflow'].values
+            fc_input = pd.DataFrame({'date': dates[start_idx:start_idx+seq_len], 'streamflow': np.nan})
+            fc_result = pybfs.forecast(fc_input, SBT, basin_char, gw_hyd, flow, ini)
+            fc_values = fc_result['Baseflow'].values
+            if fc_cache is not None:
+                fc_cache[cache_key] = fc_values
 
         skill_df.loc[start_idx:actual_end, 'FC'] = fc_values
         skill_df.loc[start_idx:actual_end, 'RES'] = (
@@ -1485,7 +1503,7 @@ def compute_bfd_ml_skill_assessment(site_no, sf_dir=None, p_dir=None):
         )
 
         res_vals = skill_df.loc[start_idx:actual_end, 'RES'].dropna().values
-        sat = float(bf_mask[start_idx:start_idx+seq_len].sum()) / seq_len
+        sat = seq_sat if seq_sat is not None else float(bf_mask[start_idx:start_idx+seq_len].sum()) / seq_len
         seq_rmse = float(np.sqrt(np.mean(res_vals**2))) if len(res_vals) > 0 else np.nan
         seq_mae = float(np.mean(np.abs(res_vals))) if len(res_vals) > 0 else np.nan
 
@@ -1535,6 +1553,113 @@ def compute_bfd_ml_skill_assessment(site_no, sf_dir=None, p_dir=None):
             'summary': fc_summary,
         },
     }
+
+
+# Per-gage forecast cache for the BFD-ensemble skill panel: {site_no: (stamp, {(start, len): fc})}.
+# The stamp changes when the streamflow record or calibration is rewritten, dropping stale forecasts.
+_bfd_event_fc_cache = {}
+
+
+@app.route('/api/gage/<site_no>/bfd_ensemble_skill')
+def api_bfd_ensemble_skill(site_no):
+    """PyBFS forecast skill over the events the BFD ensemble pools for the given params.
+
+    Takes the same query params as /bfd_ensemble, so the events (and therefore the
+    forecasts) follow whatever the ensemble sliders are set to.
+    """
+    if bfd_ensemble is None:
+        return jsonify({'error': f'BFD ensemble is not available in this deployment: {BFD_ENSEMBLE_ERROR}.'}), 503
+    if site_no not in site_info:
+        return jsonify({'error': 'Gage not found'}), 404
+    if get_gage_status(site_no) != 'calibrated':
+        return jsonify({'error': 'Forecast skill needs a PyBFS-calibrated gage. Run calibration first.'}), 400
+
+    temp_site_dir = os.path.join(TEMP_DIR, site_no)
+    temp_sf = os.path.join(temp_site_dir, f"{site_no}.csv")
+    main_sf = os.path.join(STREAMFLOW_DIR, f"{site_no}.csv")
+    if os.path.exists(temp_sf):
+        sf_dir, p_dir = temp_site_dir, temp_site_dir
+    elif os.path.exists(main_sf):
+        sf_dir, p_dir = STREAMFLOW_DIR, PARAMS_DIR
+    else:
+        return jsonify({'error': 'No streamflow data for this gage.'}), 404
+
+    try:
+        ens = bfd_ensemble.get_ensemble_result(
+            site_no,
+            bf_ratio_threshold=float(request.args.get('bf_ratio_threshold', 0.95)),
+            bf_ratio_threshold_low=float(request.args.get('bf_ratio_threshold_low', 0.75)),
+            low_flow_anchor=float(request.args.get('low_flow_anchor', bfd_ensemble.LOW_FLOW_ANCHOR)),
+            high_flow_anchor=float(request.args.get('high_flow_anchor', bfd_ensemble.HIGH_FLOW_ANCHOR)),
+            voting_fraction=float(request.args.get('voting_fraction', 0.5)),
+            t_c=int(request.args.get('t_c', 3)),
+            d_min=int(request.args.get('d_min', 7)),
+            use_flatness_vote=request.args.get('use_flatness_vote', 'false').lower() == 'true',
+            flatness_window=int(request.args.get('flatness_window', bfd_ensemble.FLATNESS_WINDOW)),
+            flatness_cv_threshold=float(request.args.get('flatness_cv_threshold', bfd_ensemble.FLATNESS_CV_THRESHOLD)),
+        )
+    except ValueError:
+        return jsonify({'error': 'Invalid parameter value'}), 400
+    except bfd_ensemble.GageNotFoundError:
+        return jsonify({'error': 'No streamflow data for this gage.'}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': f'BFD ensemble computation failed: {str(e)}'}), 500
+
+    try:
+        params_path = os.path.join(p_dir, f"params_{site_no}.csv")
+        streamflow_path = os.path.join(sf_dir, f"{site_no}.csv")
+        if not (os.path.exists(params_path) and os.path.exists(streamflow_path)):
+            return jsonify({'error': 'Missing calibration or streamflow files for this gage.'}), 400
+
+        m3_df = load_streamflow(streamflow_path).reset_index(drop=True)
+        if len(m3_df) < 365:
+            return jsonify({'error': 'Insufficient data for forecast skill (need at least 365 days).'}), 400
+
+        basin_char, gw_hyd, flow = load_site_params(params_path)
+        lb, x1, wb, por = basin_char[1], basin_char[2], basin_char[3], basin_char[4]
+        SBT = pybfs.base_table(lb, x1, wb, gw_hyd[1], gw_hyd[3], m3_df, por)
+
+        # Map each ensemble event onto rows of the (NaN-free) streamflow frame by date.
+        dates = pd.to_datetime(m3_df['Date'].values)
+        bf_mask = np.zeros(len(m3_df), dtype=bool)
+        sequences = []
+        for ev in ens['events']:
+            s_idx = int(dates.searchsorted(pd.Timestamp(ev['start_date']), side='left'))
+            e_idx = int(dates.searchsorted(pd.Timestamp(ev['end_date']), side='right')) - 1
+            if e_idx < s_idx:
+                continue
+            bf_mask[s_idx:e_idx + 1] = True
+            sequences.append((s_idx, e_idx, ev['n_bfd_days'] / ev['duration']))
+
+        stamp = (os.path.getmtime(streamflow_path), os.path.getmtime(params_path))
+        cached = _bfd_event_fc_cache.get(site_no)
+        if cached is None or cached[0] != stamp:
+            cached = _bfd_event_fc_cache[site_no] = (stamp, {})
+
+        result = _forecast_skill_for_sequences(
+            m3_df, SBT, basin_char, gw_hyd, flow, sequences, bf_mask, fc_cache=cached[1])
+        # Attach each event's voter breakdown so the modal can show who voted for it.
+        # Matched on start date: sequences skipped for lack of training data drop out
+        # of the summary, so positions don't line up with ens['events'].
+        by_start = {ev['start_date']: ev for ev in ens['events']}
+        for row in result['forecast']['summary']:
+            ev = by_start.get(row['start_date'])
+            if ev is None:
+                continue
+            row['meta'] = {
+                'duration': ev['duration'],
+                'n_bfd_days': ev['n_bfd_days'],
+                'gap_days': ev['gap_days'],
+                'mean_q': ev['mean_q'],
+                'voters': sorted(
+                    ({'label': ens['voter_labels'][v], 'days': n} for v, n in ev['voter_days'].items()),
+                    key=lambda r: -r['days']),
+            }
+        return safe_jsonify(result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': f'BFD ensemble skill failed: {str(e)}'}), 500
 
 
 @app.route('/api/gage/<site_no>/bfd_ml_skill')
