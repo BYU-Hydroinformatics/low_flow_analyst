@@ -49,6 +49,22 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 _DEFAULT_CONFIG = PipelineConfig()
 
+# App defaults for the magnitude-adaptive threshold, tuned so the digital-filter
+# voters (Eckhardt, Chapman, Lyne-Hollick, Boughton, PyBFS) agree with RF-BFD as
+# closely as possible, with the voting fraction held at 0.5. Fit on 89 gages and
+# checked on 45 held-out gages (kappa vs RF-BFD 0.13 -> 0.29); see
+# docs/rf-referenced-threshold-tuning.md. These are the LFA app's defaults only:
+# bfd_db's own defaults (and the national database build) are unchanged.
+DEFAULT_BF_RATIO_THRESHOLD = 1.00      # t_hi
+DEFAULT_BF_RATIO_THRESHOLD_LOW = 0.02  # t_lo
+DEFAULT_LOW_FLOW_ANCHOR = 0.33
+DEFAULT_HIGH_FLOW_ANCHOR = 0.43
+
+# Event pooling defaults (days): gaps up to T_C are merged, events shorter than
+# D_MIN are dropped.
+DEFAULT_T_C = 10
+DEFAULT_D_MIN = 21
+
 # Ratio-based voters (raw qb_<method> cached, threshold applied at request time).
 RATIO_METHODS = list(_DEFAULT_CONFIG.baseflowx_methods)  # eckhardt, chapman, lyne_hollick, boughton
 
@@ -200,7 +216,10 @@ def apply_params(
     # NaNs (filter warm-up, a PyBFS run that didn't converge) become null so
     # Plotly draws a gap instead of the JSON carrying a bare NaN literal.
     def _series(col):
-        return [None if pd.isna(v) else round(float(v), 3) for v in raw[col].loc[idx]]
+        # Baseflow can't exceed flow, so it is 0 on zero-flow days. PyBFS's
+        # separation otherwise carries a recession tail through dry spells.
+        col_v = raw[col].where(~zero_flow, 0.0)
+        return [None if pd.isna(v) else round(float(v), 3) for v in col_v.loc[idx]]
 
     baseflow = {
         col[3:]: _series(col) for col in raw.columns if col.startswith("qb_")
@@ -257,13 +276,13 @@ def apply_params(
 
 def get_ensemble_result(
     site_no: str,
-    bf_ratio_threshold: float = 0.95,
+    bf_ratio_threshold: float = DEFAULT_BF_RATIO_THRESHOLD,
     voting_fraction: float = 0.5,
-    t_c: int = 3,
-    d_min: int = 7,
-    bf_ratio_threshold_low: float = 0.75,
-    low_flow_anchor: float = LOW_FLOW_ANCHOR,
-    high_flow_anchor: float = HIGH_FLOW_ANCHOR,
+    t_c: int = DEFAULT_T_C,
+    d_min: int = DEFAULT_D_MIN,
+    bf_ratio_threshold_low: float = DEFAULT_BF_RATIO_THRESHOLD_LOW,
+    low_flow_anchor: float = DEFAULT_LOW_FLOW_ANCHOR,
+    high_flow_anchor: float = DEFAULT_HIGH_FLOW_ANCHOR,
     use_flatness_vote: bool = False,
     flatness_window: int = FLATNESS_WINDOW,
     flatness_cv_threshold: float = FLATNESS_CV_THRESHOLD,

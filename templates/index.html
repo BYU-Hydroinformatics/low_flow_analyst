@@ -189,6 +189,18 @@
         .bfd-focus button { font:inherit; padding:3px 9px; border:1px solid #ccc; border-radius:4px; background:#fff; cursor:pointer; }
         .bfd-focus button:hover { background:#f3e5f5; border-color:#8e24aa; }
         .bfd-focus .bfd-focus-info { color:#8e24aa; margin-left:4px; }
+        .bfd-fs-controls { display:none; gap:24px; align-items:center; margin:0 0 8px; font-size:12px; color:#555; }
+        #bfd-plot-holder.fs .bfd-fs-controls { display:flex; flex-wrap:wrap; }
+        .bfd-fs-controls .bfd-fs-param { display:flex; align-items:center; gap:8px; flex:1 1 260px; max-width:420px; }
+        .bfd-fs-controls input[type=range] { flex:1; accent-color:#8e24aa; }
+        .bfd-fs-controls .bfd-param-value { min-width:34px; text-align:right; font-weight:600; color:#6a1b9a; }
+        #bfd-plot-holder.fs { position:fixed; inset:0; z-index:10050; background:#fff; padding:10px 16px; overflow:auto; }
+        .bfd-anchor-tag { position:absolute; transform:translateY(-50%); padding:2px 7px 2px 6px; border-radius:11px; color:#fff;
+            font-size:11px; font-weight:600; white-space:nowrap; cursor:ns-resize; user-select:none; touch-action:none;
+            box-shadow:0 1px 3px rgba(0,0,0,.35); pointer-events:auto; }
+        .bfd-anchor-tag.dragging { box-shadow:0 2px 8px rgba(0,0,0,.5); z-index:5; }
+        .bfd-anchor-tag.offscreen { opacity:.55; }
+        .bfd-anchor-preview { position:absolute; height:0; border-top:2px dashed; pointer-events:none; z-index:4; }
         .bfd-legend {
             display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
             padding: 8px 12px; font-size: 11px; color: #666;
@@ -1475,7 +1487,7 @@
 
         // ===== BFD Ensemble =====
         // Per-gage tunable parameters (bf_ratio_threshold = "X% threshold").
-        let bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
+        let bfdParams = { bf_ratio_threshold: 1.00, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.43, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
         // Categorical slots 1-5 of the validated palette, pinned per method so a
         // method keeps its colour whether or not the others are present.
         const BFD_METHOD_COLORS = {
@@ -1489,6 +1501,12 @@
         let bfdCalibrated = false;   // forecast skill needs PyBFS parameters
         let bfdSkillOn = false;      // once requested, skill re-runs whenever the events change
         let bfdHiddenCurves = new Set();   // methods whose baseflow curve is switched off on the hydrograph
+        let bfdLogY = false;         // linear flow axis by default; the focus-bar checkbox switches to log, which makes the anchors easier to read
+        let bfdHighlight = null;     // method whose baseflow curve is emphasised on the hydrograph (click a curve to set / clear)
+        let bfdFullscreen = false;   // the hydrograph block is expanded over the whole window
+        let bfdYUser = null;         // flow-axis range the user zoomed/panned to; beats the auto-fit until reset
+        let bfdSite = null;
+        let bfdAnchorShapes = [];   // which anchor param each anchor line (shape index) drives
         let bfdFocus = null;         // [start, end] ISO dates the hydrograph is limited to, or null for the full record
         let bfdData = null;          // last ensemble response (for focus bookkeeping)
         let bfdSkillData = null;     // last full-record skill response, filtered client-side by the focus
@@ -1498,9 +1516,12 @@
 
         async function loadBfdEnsemble(siteNo) {
             const container = document.getElementById('bfd-ensemble-container');
-            bfdParams = { bf_ratio_threshold: 0.95, bf_ratio_threshold_low: 0.75, low_flow_anchor: 0.10, high_flow_anchor: 0.50, voting_fraction: 0.5, t_c: 3, d_min: 7, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
+            bfdParams = { bf_ratio_threshold: 1.00, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.43, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
             bfdSkillOn = false;
             bfdFocus = null;
+            bfdYUser = null;
+            bfdFullscreen = false;
+            bfdHighlight = null;
             bfdHiddenCurves = new Set();
             container.innerHTML = '<div class="loading"><span class="spinner"></span> Running BFD ensemble (first load per gage caches the voters)...</div>';
             await fetchAndRenderBfdEnsemble(siteNo);
@@ -1565,12 +1586,12 @@
                 <div class="bfd-param-row">
                     <div class="bfd-param">
                         <div class="bfd-param-label"><span>X% Threshold &mdash; high flow</span><span class="bfd-param-value" id="bfd-val-threshold">${pct(bfdParams.bf_ratio_threshold)}</span></div>
-                        <input type="range" min="0.5" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold}"
+                        <input type="range" min="0" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold}"
                             oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold', parseFloat(this.value), 'bfd-val-threshold', v => Math.round(v*100)+'%')">
                     </div>
                     <div class="bfd-param">
                         <div class="bfd-param-label"><span>X% Threshold &mdash; low flow</span><span class="bfd-param-value" id="bfd-val-threshold-low">${pct(bfdParams.bf_ratio_threshold_low)}</span></div>
-                        <input type="range" min="0.5" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold_low}"
+                        <input type="range" min="0" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold_low}"
                             oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold_low', parseFloat(this.value), 'bfd-val-threshold-low', v => Math.round(v*100)+'%')">
                     </div>
                 </div>
@@ -1653,8 +1674,9 @@
             }
 
             bfdData = data;
+            bfdSite = siteNo;
             const dMin = data.dates[0], dMax = data.dates[data.dates.length - 1];
-            html += `${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Scroll or drag to zoom &mdash; the voter strip and skill events follow')}
+            html += `<div id="bfd-plot-holder">${plotHeader('BFD Ensemble Hydrograph', 'plot-bfd', 'Scroll or drag to zoom &mdash; click a method curve to highlight it, drag the tags on the right to move the anchors')}
                      <div class="bfd-focus">
                         <b>Focus period</b>
                         <input type="date" id="bfd-focus-start" min="${dMin}" max="${dMax}" value="${bfdFocus ? bfdFocus[0] : dMin}" onchange="bfdFocusInput()">
@@ -1665,15 +1687,35 @@
                         <button onclick="bfdFocusYears(1)">1 yr</button>
                         <button onclick="bfdFocusYears(5)">5 yr</button>
                         <button onclick="bfdFocusReset()">Full record</button>
+                        <button onclick="bfdFitAnchors()" title="Set the flow axis so both anchor lines are well apart and easy to grab">Fit flow to anchors</button>
+                        <label style="margin-left:8px;display:flex;align-items:center;gap:4px;cursor:pointer" title="Log scale makes the anchor flows readable against the peaks. Zero-flow days cannot be drawn on a log axis.">
+                            <input type="checkbox" ${bfdLogY ? 'checked' : ''} onchange="bfdLogToggled(this.checked)"> Log flow axis
+                        </label>
                         <span class="bfd-focus-info" id="bfd-focus-info"></span>
                      </div>
-                     <div class="plot-div" id="plot-bfd"></div>
+                     <div class="bfd-fs-controls">
+                        <b>Thresholds</b>
+                        <label class="bfd-fs-param"><span style="color:#e65100;font-weight:600;white-space:nowrap">High flow</span>
+                            <input type="range" min="0" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold}"
+                                oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold', parseFloat(this.value), 'bfd-fs-val-threshold', v => Math.round(v*100)+'%')">
+                            <span class="bfd-param-value" id="bfd-fs-val-threshold">${pct(bfdParams.bf_ratio_threshold)}</span></label>
+                        <label class="bfd-fs-param"><span style="color:#00897b;font-weight:600;white-space:nowrap">Low flow</span>
+                            <input type="range" min="0" max="1" step="0.01" value="${bfdParams.bf_ratio_threshold_low}"
+                                oninput="bfdParamChanged('${siteNo}', 'bf_ratio_threshold_low', parseFloat(this.value), 'bfd-fs-val-threshold-low', v => Math.round(v*100)+'%')">
+                            <span class="bfd-param-value" id="bfd-fs-val-threshold-low">${pct(bfdParams.bf_ratio_threshold_low)}</span></label>
+                     </div>
+                     <div style="position:relative">
+                        <div class="plot-div" id="plot-bfd"></div>
+                        <div id="bfd-anchor-tags" style="position:absolute;inset:0;pointer-events:none;overflow:hidden"></div>
+                     </div>
                      <div class="bfd-legend">
                         <span><i style="background:#1a73e8"></i>method calls BFD</span>
                         <span><i style="background:#8e24aa"></i>ensemble calls BFD</span>
                         <span><i style="background:#eceff1;border:1px solid #dde3e6"></i>not BFD</span>
                         <span><i style="background:rgba(142,36,170,0.12);border:1px solid #e1bee7"></i>pooled event</span>
-                     </div>`;
+                        <span><i style="background:none;border-top:2px dashed #00897b;height:0;margin-top:5px"></i>low anchor</span>
+                        <span><i style="background:none;border-top:2px dashed #e65100;height:0;margin-top:5px"></i>high anchor</span>
+                     </div></div>`;
 
             if (bfdCalibrated) {
                 html += `<div id="bfd-skill-container" style="margin-top:16px">${
@@ -1682,6 +1724,12 @@
             }
 
             container.innerHTML = html;
+            // The shared Expand re-plots a static copy (no anchor tags, wrong margins and
+            // strip proportions), so the BFD block expands itself in place instead.
+            const holder = document.getElementById('bfd-plot-holder');
+            const expandBtn = holder && holder.querySelector('.expand-btn');
+            if (expandBtn) expandBtn.onclick = () => bfdToggleFullscreen();
+            if (bfdFullscreen) { holder.classList.add('fs'); bfdSyncExpandButton(); }
             setTimeout(() => { renderBfdChart(data); bfdFocusUpdated(false); }, 0);
             if (bfdSkillOn && bfdCalibrated) loadBfdSkill(siteNo);
         }
@@ -1712,6 +1760,8 @@
             box.innerHTML = '<div id="bfd-skill-body"></div>';
             renderBfdSkillView();
         }
+
+        const fmtAnchorQ = (v) => v === null || v === undefined ? '?' : (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
 
         function renderBfdChart(data) {
             // Which pooled event (if any) covers each displayed day.
@@ -1751,7 +1801,8 @@
             // the strip's rows (jsonify sorts dict keys, which would not).
             const bfTraces = data.voters.filter(m => (data.baseflow || {})[m]).map(m => ({
                 x: data.dates, y: data.baseflow[m], mode: 'lines',
-                line: { color: BFD_METHOD_COLORS[m] || '#888', width: 1 },
+                line: { color: BFD_METHOD_COLORS[m] || '#888', width: bfdHighlight === m ? 3.5 : 1 },
+                opacity: bfdHighlight && bfdHighlight !== m ? 0.2 : 1,
                 name: data.voter_labels[m] || m, meta: m,
                 visible: bfdHiddenCurves.has(m) ? 'legendonly' : true,
                 hovertemplate: `%{x}<br>${data.voter_labels[m] || m} baseflow: %{y:.2f} cfs<extra></extra>`,
@@ -1804,15 +1855,18 @@
             const nRows = data.voters.length + 1;
             const stripPx = nRows * 22;
             const marginT = 44, marginB = 50;
-            const height = 340 + stripPx + marginT + marginB;
+            // Expanded: use the window, leaving room for the header, focus bar and legend.
+            const height = bfdFullscreen ? Math.max(480, window.innerHeight - 235) : 340 + stripPx + marginT + marginB;
             const plotPx = height - marginT - marginB;
             const stripFrac = Math.min(0.45, stripPx / plotPx);
             const hydroBottom = stripFrac + 0.07;
 
             // Event bands are hoverable traces (not layout shapes, which can't carry
-            // hover text) on a hidden 0-1 overlay axis, so a band spans the plot
-            // height whatever the flow scale and its card shows on hover anywhere
-            // inside it, not just near the flow line.
+            // hover text), so a band's card shows on hover anywhere inside it, not
+            // just near the flow line.
+            // Drawn on the real flow axis, tall enough to span any zoom (an overlay
+            // axis would swallow the mouse events and make the flow axis unzoomable).
+            const bandLo = bfdLogY ? 1e-6 : -1e7, bandHi = 1e7;
             const bandTraces = data.events.map((ev, k) => {
                 const rows = data.voters
                     .map(v => ({ v, n: ev.voter_days ? ev.voter_days[v] : 0 }))
@@ -1823,27 +1877,51 @@
                     `mean Q ${ev.mean_q} cfs`, '<b>Voters (days called BFD):</b>'].concat(rows).join('<br>');
                 return {
                     x: [ev.start_date, ev.end_date, ev.end_date, ev.start_date, ev.start_date],
-                    y: [0, 0, 1, 1, 0], xaxis: 'x', yaxis: 'y3', type: 'scatter', mode: 'lines',
+                    y: [bandLo, bandLo, bandHi, bandHi, bandLo], xaxis: 'x', yaxis: 'y', type: 'scatter', mode: 'lines',
                     fill: 'toself', hoveron: 'fills', line: { width: 0 },
                     fillcolor: 'rgba(142,36,170,0.12)', text: text, hoverinfo: 'text',
                     showlegend: false, name: `E${k + 1}`,
                 };
             });
 
+            // The two flow anchors the threshold ramp is pinned to, drawn at their
+            // actual flows so the hydrograph can be read against them: at or below
+            // the low line a day needs only the low threshold, at or above the high
+            // line the full high threshold, log-interpolated in between.
+            const anchorShapes = [], anchorNotes = [];
+            const anchors = data.anchor_flows || [null, null];
+            bfdAnchorShapes = [];
+            [
+                { key: 'low_flow_anchor', q: anchors[0], color: '#00897b', text: `Low anchor P${Math.round(bfdParams.low_flow_anchor * 100)} \u00b7 ${fmtAnchorQ(anchors[0])} cfs \u00b7 threshold ${Math.round(bfdParams.bf_ratio_threshold_low * 100)}% at or below` },
+                { key: 'high_flow_anchor', q: anchors[1], color: '#e65100', text: `High anchor P${Math.round(bfdParams.high_flow_anchor * 100)} \u00b7 ${fmtAnchorQ(anchors[1])} cfs \u00b7 threshold ${Math.round(bfdParams.bf_ratio_threshold * 100)}% at or above` },
+            ].forEach(a => {
+                if (a.q === null || a.q === undefined) return;
+                bfdAnchorShapes.push(a.key);
+                anchorShapes.push({ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: a.q, y1: a.q,
+                                    line: { color: a.color, width: 3, dash: 'dash' } });
+                // annotations (unlike shapes) take log10 units on a log axis
+                anchorNotes.push({ xref: 'paper', x: 1, xanchor: 'right', yref: 'y', y: bfdLogY ? Math.log10(a.q) : a.q, yanchor: 'bottom',
+                                   text: a.text, showarrow: false, font: { size: 10, color: a.color },
+                                   bgcolor: 'rgba(255,255,255,0.75)' });
+            });
+
             renderChart('plot-bfd', [qTrace].concat(bfTraces, bandTraces, [strip]), {
                 height: height,
-                margin: { l: 95, r: 20, t: marginT, b: marginB },
+                margin: { l: 95, r: 84, t: marginT, b: marginB },
                 xaxis: Object.assign({ type: 'date', anchor: 'y2' }, bfdFocus ? { range: bfdFocus } : {}),
                 yaxis: Object.assign({
                     title: { text: 'Streamflow (cfs)', font: { size: 11 } },
-                    domain: [hydroBottom, 1], rangemode: 'tozero',
-                }, bfdFocus ? { range: bfdYRange(data, bfdFocus) } : {}),
+                    domain: [hydroBottom, 1],
+                }, bfdLogY ? { type: 'log' } : { rangemode: 'tozero' },
+                   bfdYUser ? { range: bfdYUser }
+                       : { range: bfdYRange(data, bfdFocus || [data.dates[0], data.dates[data.dates.length - 1]]) }),
                 yaxis2: {
                     domain: [0, stripFrac], anchor: 'x', type: 'category',
                     tickfont: { size: 10 }, showgrid: false, zeroline: false,
                     fixedrange: true,
                 },
-                yaxis3: { domain: [hydroBottom, 1], range: [0, 1], overlaying: 'y', visible: false, fixedrange: true },
+                shapes: anchorShapes,
+                annotations: anchorNotes,
                 hovermode: 'closest',
                 showlegend: true,
                 legend: {
@@ -1856,6 +1934,17 @@
 
             // Scroll/drag zoom is a focus change too: mirror it into the date
             // inputs, rescale y to what's visible, and re-filter skill events.
+            document.getElementById('plot-bfd').on('plotly_afterplot', bfdPlaceTags);
+
+            // Click a method's baseflow curve to emphasise it (thicker, the others
+            // faded); click it again, or any other curve, to move/clear the emphasis.
+            document.getElementById('plot-bfd').on('plotly_click', (ev) => {
+                const m = ev.points && ev.points[0] && ev.points[0].data && ev.points[0].data.meta;
+                if (!m || !(data.baseflow || {})[m]) return;
+                bfdHighlight = bfdHighlight === m ? null : m;
+                bfdApplyHighlight();
+            });
+
             // Legend clicks and the checkboxes toggle the same curves; keep them in step.
             document.getElementById('plot-bfd').on('plotly_restyle', () => {
                 const gd = document.getElementById('plot-bfd');
@@ -1868,17 +1957,172 @@
             });
 
             document.getElementById('plot-bfd').on('plotly_relayout', (ev) => {
+                const userY = ev['yaxis.range[0]'] !== undefined;
                 if (ev['xaxis.autorange']) {
                     bfdFocus = null;
-                    Plotly.relayout('plot-bfd', { 'yaxis.autorange': true });
+                    bfdYUser = null;
+                    Plotly.relayout('plot-bfd', bfdLogY ? { 'yaxis.range': bfdYRange(bfdData, [bfdData.dates[0], bfdData.dates[bfdData.dates.length - 1]]) } : { 'yaxis.autorange': true });
                 } else if (ev['xaxis.range[0]'] !== undefined) {
                     bfdFocus = [String(ev['xaxis.range[0]']).slice(0, 10), String(ev['xaxis.range[1]']).slice(0, 10)];
-                    Plotly.relayout('plot-bfd', { 'yaxis.range': bfdYRange(bfdData, bfdFocus) });
+                    if (userY) {
+                        bfdYUser = [ev['yaxis.range[0]'], ev['yaxis.range[1]']];   // zoomed both ways: keep their y
+                    } else {
+                        bfdYUser = null;
+                        Plotly.relayout('plot-bfd', { 'yaxis.range': bfdYRange(bfdData, bfdFocus) });
+                    }
+                } else if (userY) {
+                    // Vertical zoom/pan only: remember it so a re-render keeps it.
+                    bfdYUser = [ev['yaxis.range[0]'], ev['yaxis.range[1]']];
+                    return;
                 } else {
-                    return;   // y-only change (our own rescale)
+                    return;   // our own programmatic rescale
                 }
                 bfdFocusUpdated(true);
             });
+        }
+
+        // Fraction of this gage's non-zero flow days at or below q (the anchors are
+        // percentiles of non-zero flow). Uses the displayed series, which is at most
+        // a few-day stride of the record; the server then resolves the exact flow
+        // and the line snaps to it on re-render.
+        function bfdFlowToPercentile(q) {
+            const pos = bfdData.q.filter(v => v !== null && v > 0).sort((a, b) => a - b);
+            if (!pos.length) return 0.5;
+            let lo = 0, hi = pos.length;
+            while (lo < hi) { const m = (lo + hi) >> 1; if (pos[m] <= q) lo = m + 1; else hi = m; }
+            return lo / pos.length;
+        }
+
+        function bfdAnchorDragged(key, q) {
+            if (!(q > 0)) { renderBfdChart(bfdData); return; }   // dragged off the log axis: snap back
+            const range = key === 'low_flow_anchor' ? [0, 0.9] : [0.1, 1];
+            let pct = Math.round(bfdFlowToPercentile(q) * 100) / 100;
+            pct = Math.max(range[0], Math.min(range[1], pct));
+            bfdParams[key] = pct;
+            fetchAndRenderBfdEnsemble(bfdSite);
+        }
+
+        // Frame the flow axis around the two anchors so the lines are far enough
+        // apart to grab on a linear axis. The range is remembered like any other
+        // vertical zoom; Full record (or double-click) puts the auto-fit back.
+        function bfdFitAnchors() {
+            const a = (bfdData.anchor_flows || []).filter(v => v > 0);
+            if (!a.length) return;
+            const lo = Math.min(...a), hi = Math.max(...a);
+            bfdYUser = bfdLogY ? [Math.log10(lo) - 0.5, Math.log10(hi) + 0.5] : [0, hi * 2.5];
+            Plotly.relayout('plot-bfd', { 'yaxis.range': bfdYUser });
+        }
+
+        // ---- Draggable anchor tags ----
+        // One pill per anchor in the plot's right margin, level with its dashed
+        // line. They are plain page elements with their own pointer handling (not
+        // Plotly shapes), so dragging works the same in every browser and the two
+        // tags can be nudged apart when the lines overlap on a linear axis.
+        const BFD_TAG_H = 22;
+
+        function bfdAnchorDefs() {
+            const a = bfdData.anchor_flows || [null, null];
+            return [
+                { key: 'low_flow_anchor', name: 'Low', color: '#00897b', q: a[0] },
+                { key: 'high_flow_anchor', name: 'High', color: '#e65100', q: a[1] },
+            ].filter(d => d.q !== null && d.q !== undefined && d.q > 0);
+        }
+
+        function bfdPlaceTags() {
+            const gd = document.getElementById('plot-bfd'), box = document.getElementById('bfd-anchor-tags');
+            if (!gd || !box || !gd._fullLayout || !gd._fullLayout.yaxis || !gd._fullLayout.yaxis.l2p || box.querySelector('.dragging')) return;
+            const ya = gd._fullLayout.yaxis, xa = gd._fullLayout.xaxis;
+            const defs = bfdAnchorDefs();
+            const ypos = defs.map(d => ya._offset + ya.l2p(ya.type === 'log' ? Math.log10(d.q) : d.q));
+            // Keep each tag inside the hydrograph, and push two tags apart if their lines are close.
+            const lo = ya._offset, hi = ya._offset + ya._length;
+            const clamped = ypos.map(y => Math.max(lo, Math.min(hi, y)));
+            const offscreen = ypos.map((y, i) => y !== clamped[i]);
+            if (defs.length === 2) {   // defs[0] = low (lower on screen), defs[1] = high
+                const gap = clamped[0] - clamped[1];
+                if (gap < BFD_TAG_H + 2) {
+                    const push = (BFD_TAG_H + 2 - gap) / 2;
+                    clamped[0] += push; clamped[1] -= push;
+                }
+            }
+            const left = xa._offset + xa._length + 6;
+            box.innerHTML = '';
+            defs.forEach((d, i) => {
+                const tag = document.createElement('div');
+                tag.className = 'bfd-anchor-tag' + (offscreen[i] ? ' offscreen' : '');
+                tag.style.cssText = `left:${left}px;top:${clamped[i]}px;background:${d.color}`;
+                tag.title = `Drag to move the ${d.name.toLowerCase()} anchor`;
+                tag.textContent = `\u2195 ${d.name} P${Math.round(bfdParams[d.key] * 100)}`;
+                tag.addEventListener('pointerdown', e => bfdTagDown(e, tag, d, ypos[i], clamped[i]));
+                box.appendChild(tag);
+            });
+        }
+
+        function bfdTagDown(e, tag, d, lineY, tagY) {
+            e.preventDefault();
+            tag.setPointerCapture(e.pointerId);
+            tag.classList.add('dragging');
+            const gd = document.getElementById('plot-bfd'), box = document.getElementById('bfd-anchor-tags');
+            const ya = gd._fullLayout.yaxis, xa = gd._fullLayout.xaxis;
+            const boxTop = box.getBoundingClientRect().top;
+            const grab = e.clientY - boxTop - tagY;   // where on the tag it was grabbed
+            const preview = document.createElement('div');
+            preview.className = 'bfd-anchor-preview';
+            preview.style.cssText = `left:${xa._offset}px;width:${xa._length}px;border-color:${d.color}`;
+            box.appendChild(preview);
+            let q = d.q;
+            const move = ev => {
+                let y = ev.clientY - boxTop - grab;
+                y = Math.max(ya._offset, Math.min(ya._offset + ya._length - 1, y));
+                q = Math.max(1e-3, ya.p2d(y - ya._offset));
+                tag.style.top = y + 'px';
+                preview.style.top = y + 'px';
+                tag.textContent = `\u2195 P${Math.round(bfdFlowToPercentile(q) * 100)} \u00b7 ${fmtAnchorQ(q)}`;
+            };
+            const up = ev => {
+                tag.removeEventListener('pointermove', move);
+                tag.removeEventListener('pointerup', up);
+                tag.removeEventListener('pointercancel', up);
+                tag.classList.remove('dragging');
+                preview.remove();
+                if (q !== d.q) bfdAnchorDragged(d.key, q); else bfdPlaceTags();
+            };
+            tag.addEventListener('pointermove', move);
+            tag.addEventListener('pointerup', up);
+            tag.addEventListener('pointercancel', up);
+            move(e);
+        }
+
+        function bfdSyncExpandButton() {
+            const b = document.querySelector('#bfd-plot-holder .expand-btn');
+            if (b) b.innerHTML = bfdFullscreen ? '&times; Close' : b.dataset.orig;
+        }
+
+        function bfdToggleFullscreen(force) {
+            const holder = document.getElementById('bfd-plot-holder');
+            if (!holder || !bfdData) return;
+            const b = holder.querySelector('.expand-btn');
+            if (b && !b.dataset.orig) b.dataset.orig = b.innerHTML;
+            bfdFullscreen = force === undefined ? !bfdFullscreen : force;
+            holder.classList.toggle('fs', bfdFullscreen);
+            bfdSyncExpandButton();
+            renderBfdChart(bfdData);   // recompute the height and the strip proportions
+            holder.scrollTop = 0;
+        }
+
+        document.addEventListener('keydown', e => { if (e.key === 'Escape' && bfdFullscreen) bfdToggleFullscreen(false); });
+
+        function bfdApplyHighlight() {
+            const gd = document.getElementById('plot-bfd');
+            if (!gd || !gd.data) return;
+            const idx = [], widths = [], ops = [];
+            gd.data.forEach((t, i) => {
+                if (!t.meta) return;
+                idx.push(i);
+                widths.push(bfdHighlight === t.meta ? 3.5 : 1);
+                ops.push(bfdHighlight && bfdHighlight !== t.meta ? 0.2 : 1);
+            });
+            if (idx.length) Plotly.restyle(gd, { 'line.width': widths, opacity: ops }, idx);
         }
 
         function bfdToggleCurve(method, on) {
@@ -1889,11 +2133,25 @@
 
         // y range fitting the flow visible in [a, b]
         function bfdYRange(data, focus) {
-            let mx = 0;
+            let mx = 0, mn = Infinity;
             data.dates.forEach((d, i) => {
-                if (d >= focus[0] && d <= focus[1] && data.q[i] !== null && data.q[i] > mx) mx = data.q[i];
+                const q = data.q[i];
+                if (d >= focus[0] && d <= focus[1] && q !== null) {
+                    if (q > mx) mx = q;
+                    if (q > 0 && q < mn) mn = q;
+                }
             });
-            return [0, (mx || 1) * 1.08];
+            if (!bfdLogY) return [0, (mx || 1) * 1.08];
+            // Log axis: range is in log10 units; include the anchors so they stay in view.
+            (data.anchor_flows || []).forEach(a => { if (a > 0) { mx = Math.max(mx, a); mn = Math.min(mn, a); } });
+            if (!isFinite(mn) || mx <= 0) return [-1, 1];
+            return [Math.log10(mn) - 0.15, Math.log10(mx) + 0.1];
+        }
+
+        function bfdLogToggled(on) {
+            bfdLogY = on;
+            bfdYUser = null;   // ranges differ between linear and log
+            renderBfdChart(bfdData);
         }
 
         function bfdSetFocus(a, b) {
@@ -1902,6 +2160,7 @@
             if (b > dMax) b = dMax;
             if (!(a < b)) return;
             bfdFocus = [a, b];
+            bfdYUser = null;
             Plotly.relayout('plot-bfd', { 'xaxis.range': bfdFocus, 'yaxis.range': bfdYRange(bfdData, bfdFocus) });
             bfdFocusUpdated(true);
         }
@@ -1932,7 +2191,8 @@
 
         function bfdFocusReset() {
             bfdFocus = null;
-            Plotly.relayout('plot-bfd', { 'xaxis.autorange': true, 'yaxis.autorange': true });
+            bfdYUser = null;
+            Plotly.relayout('plot-bfd', Object.assign({ 'xaxis.autorange': true }, bfdLogY ? { 'yaxis.range': bfdYRange(bfdData, [bfdData.dates[0], bfdData.dates[bfdData.dates.length - 1]]) } : { 'yaxis.autorange': true }));
             bfdFocusUpdated(true);
         }
 
@@ -2046,7 +2306,9 @@
                             onclick="openForecastModal(forecastModalData, 0)">
                             &#9654; View Hydrograph ${noun.charAt(0).toUpperCase() + noun.slice(1)}s
                          </button>`;
-                html += `${plotHeader('Per-${noun.charAt(0).toUpperCase() + noun.slice(1)} RMSE & MAE', 'plot-skill-fc' + sfx, '')}
+                html += `${plotHeader('Forecast Error vs. Lead Time (% of observed flow)', 'plot-skill-lead' + sfx, 'Each thin line is one ${noun}; bold = median, band = 25\u201375%')}
+                         <div class="plot-div" id="plot-skill-lead${sfx}"></div>`;
+                html += `${plotHeader('Bias per ${noun.charAt(0).toUpperCase() + noun.slice(1)} (mean forecast vs. observed)', 'plot-skill-fc' + sfx, 'Above 0 = forecast too high; dot size = duration')}
                          <div class="plot-div" id="plot-skill-fc${sfx}"></div>`;
             } else {
                 html += `<div class="skill-no-seqs">${opts.emptyMsg || 'No qualifying baseflow sequences found for forecast skill evaluation (need \u2265 30 consecutive baseflow-dominated days).'}</div>`;
@@ -2077,24 +2339,69 @@
                 }
 
                 if (fc.n_sequences > 0) {
-                    const seqLabels = fc.summary.map(s => `${noun === 'event' ? 'Ev' : 'Seq'} ${s.seq} (${s.len}d)`);
-                    const rmseVals = fc.summary.map(s => s.rmse);
-                    const maeVals = fc.summary.map(s => s.mae);
-                    const hoverTexts = fc.summary.map(s => `${s.start_date} — ${s.end_date}`);
+                    // Per-event daily relative error (forecast - observed) / observed, by day since start.
+                    const byEv = new Map();
+                    fc.seq.forEach((sq, i) => {
+                        if (sq === null || sq === undefined || isNaN(sq)) return;
+                        const q = fc.q[i], f = fc.fc[i];
+                        if (q === null || f === null || !(q > 0) || isNaN(f)) return;
+                        const k = Math.round(sq);
+                        if (!byEv.has(k)) byEv.set(k, []);
+                        byEv.get(k).push({ d: fc.dates[i], q, f });
+                    });
+                    const rel = (r) => (r.f - r.q) / r.q * 100;
+                    const lineTraces = [];
+                    const byLead = [];
+                    byEv.forEach((rows, k) => {
+                        const ys = rows.map(rel);
+                        ys.forEach((y, j) => { (byLead[j] = byLead[j] || []).push(y); });
+                        lineTraces.push({ x: ys.map((_, j) => j + 1), y: ys, mode: 'lines',
+                            line: { color: 'rgba(92,107,192,0.25)', width: 1 }, showlegend: false,
+                            customdata: ys.map(() => `${noun === 'event' ? 'Event' : 'Seq'} ${k}`),
+                            hovertemplate: '%{customdata}<br>day %{x}: %{y:.1f}%<extra></extra>' });
+                    });
+                    const quant = (arr, p) => { const a = arr.slice().sort((x, y) => x - y); const i = (a.length - 1) * p; const lo = Math.floor(i); return a[lo] + (a[Math.ceil(i)] - a[lo]) * (i - lo); };
+                    const leads = byLead.map((_, j) => j + 1).filter(j => byLead[j - 1].length >= 3);
+                    const q25 = leads.map(j => quant(byLead[j - 1], 0.25));
+                    const q75 = leads.map(j => quant(byLead[j - 1], 0.75));
+                    const med = leads.map(j => quant(byLead[j - 1], 0.5));
+                    const zero = { x: [1, byLead.length], y: [0, 0], mode: 'lines', line: { color: '#666', width: 1, dash: 'dot' }, showlegend: false, hoverinfo: 'skip' };
+                    const bandLo = { x: leads, y: q25, mode: 'lines', line: { width: 0 }, showlegend: false, hoverinfo: 'skip' };
+                    const bandHi = { x: leads, y: q75, mode: 'lines', line: { width: 0 }, fill: 'tonexty', fillcolor: 'rgba(92,107,192,0.25)', name: '25\u201375%', hoverinfo: 'skip' };
+                    const medTr = { x: leads, y: med, mode: 'lines', line: { color: '#3949ab', width: 3 }, name: 'Median',
+                        hovertemplate: 'day %{x}<br>median %{y:.1f}%<extra></extra>' };
+                    // Clip the view to the central mass so one wild event can't flatten the rest.
+                    const lim = Math.max(10, Math.min(100, Math.max(...q75.map(Math.abs), ...q25.map(Math.abs)) * 2));
+                    renderChart('plot-skill-lead' + sfx, [zero, ...lineTraces, bandLo, bandHi, medTr], {
+                        margin: { l: 60, r: 20, t: 10, b: 45 },
+                        xaxis: { title: { text: 'Days since ' + noun + ' start', font: { size: 11 } } },
+                        yaxis: { title: { text: 'Forecast error (%)', font: { size: 11 } }, range: [-lim, lim], zeroline: false },
+                        legend: { orientation: 'h', y: 1.1 },
+                        plot_bgcolor: '#fff', paper_bgcolor: '#fff',
+                        font: { family: 'Inter,sans-serif', size: 11 },
+                    });
 
-                    const rmseBar = { x: seqLabels, y: rmseVals, type: 'bar', name: 'RMSE',
-                        marker: { color: '#5c6bc0' }, text: hoverTexts, customdata: hoverTexts,
-                        hovertemplate: '<b>%{x}</b><br>%{customdata}<br>RMSE: %{y:.4f} m³/s<extra></extra>' };
-                    const maeBar = { x: seqLabels, y: maeVals, type: 'bar', name: 'MAE',
-                        marker: { color: '#9fa8da' }, text: hoverTexts, customdata: hoverTexts,
-                        hovertemplate: '<b>%{x}</b><br>%{customdata}<br>MAE: %{y:.4f} m³/s<extra></extra>' };
-
-                    renderChart('plot-skill-fc' + sfx, [rmseBar, maeBar], {
-                        barmode: 'group',
-                        margin: { l: 60, r: 20, t: 10, b: 80 },
-                        xaxis: { tickangle: -30 },
-                        yaxis: { title: { text: 'Error (m³/s)', font: { size: 11 } } },
-                        legend: { orientation: 'h', y: 1.08 },
+                    // Per-event signed bias (% of mean observed), placed at the event's start date.
+                    const evs = fc.summary.map(sm => {
+                        const rows = byEv.get(sm.seq) || [];
+                        if (!rows.length) return null;
+                        const mq = rows.reduce((a, r) => a + r.q, 0) / rows.length;
+                        const mf = rows.reduce((a, r) => a + r.f, 0) / rows.length;
+                        return { sm, mq, bias: (mf - mq) / mq * 100, nrmse: sm.rmse !== null ? sm.rmse / mq * 100 : null };
+                    }).filter(Boolean);
+                    const stems = evs.map(e => ({ x: [e.sm.start_date, e.sm.start_date], y: [0, e.bias], mode: 'lines',
+                        line: { color: '#ccc', width: 1 }, showlegend: false, hoverinfo: 'skip' }));
+                    const dots = { x: evs.map(e => e.sm.start_date), y: evs.map(e => e.bias), mode: 'markers', showlegend: false,
+                        marker: { color: evs.map(e => e.bias >= 0 ? '#e53935' : '#1e88e5'), opacity: 0.85,
+                                  size: evs.map(e => Math.max(7, Math.min(22, 5 + e.sm.len / 5))), line: { color: '#fff', width: 1 } },
+                        customdata: evs.map(e => [e.sm.seq, e.sm.start_date, e.sm.end_date, e.sm.len, e.mq, e.nrmse === null ? NaN : e.nrmse]),
+                        hovertemplate: '<b>' + (noun === 'event' ? 'Event' : 'Seq') + ' %{customdata[0]}</b><br>%{customdata[1]} \u2192 %{customdata[2]} (%{customdata[3]} d)<br>Mean observed: %{customdata[4]:.3f} m\u00b3/s<br>Bias: %{y:+.1f}%<br>RMSE: %{customdata[5]:.1f}% of mean flow<extra></extra>' };
+                    const zero2 = { x: [evs[0].sm.start_date, evs[evs.length - 1].sm.start_date], y: [0, 0], mode: 'lines',
+                        line: { color: '#666', width: 1, dash: 'dot' }, showlegend: false, hoverinfo: 'skip' };
+                    renderChart('plot-skill-fc' + sfx, [zero2, ...stems, dots], {
+                        margin: { l: 60, r: 20, t: 10, b: 45 },
+                        xaxis: { type: 'date' },
+                        yaxis: { title: { text: 'Bias (% of mean observed)', font: { size: 11 } }, zeroline: false },
                         plot_bgcolor: '#fff', paper_bgcolor: '#fff',
                         font: { family: 'Inter,sans-serif', size: 11 },
                     });

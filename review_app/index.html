@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BFD Event Review</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2430; --mute:#6b7685; --line:#dde2e8; --acc:#2563eb;
+          --good:#16803c; --ok:#b7791f; --bad:#c0392b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1a2029; --ink:#e6eaf0; --mute:#93a0b1; --line:#2b3441; --acc:#6ea0ff;
+            --good:#4ade80; --ok:#fbbf24; --bad:#f87171; }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 -apple-system,system-ui,sans-serif }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:8px 14px; background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5 }
+  header input, header select, header button, .params input { font:inherit; padding:4px 7px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink) }
+  header input[type=text] { width:100px }
+  button { cursor:pointer } button:hover { border-color:var(--acc) }
+  .prog { flex:1; min-width:140px; height:8px; background:var(--line); border-radius:4px; overflow:hidden }
+  .prog > div { height:100%; background:var(--acc); width:0 }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 310px; gap:12px; padding:12px 14px }
+  @media (max-width:1000px){ main { grid-template-columns:1fr } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px }
+  h2 { margin:0 0 4px; font-size:16px } .mute { color:var(--mute); font-size:12px }
+  .meta span { margin-right:14px }
+  .side label.t { display:flex; gap:6px; align-items:center; padding:2px 0 }
+  .rate { display:flex; gap:6px; margin:6px 0 10px }
+  .rate button { flex:1; padding:8px 4px; font-weight:600 }
+  .rate button.sel[data-v=good] { background:var(--good); color:#fff; border-color:var(--good) }
+  .rate button.sel[data-v=ok] { background:var(--ok); color:#fff; border-color:var(--ok) }
+  .rate button.sel[data-v=bad] { background:var(--bad); color:#fff; border-color:var(--bad) }
+  textarea { width:100%; height:64px; font:inherit; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:5px }
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 }
+  .row button { padding:5px 8px }
+  button.armed { background:var(--acc); color:#fff; border-color:var(--acc) }
+  .nav { display:flex; gap:6px; margin-top:8px } .nav button { flex:1; padding:8px }
+  .nav .primary { background:var(--acc); color:#fff; border-color:var(--acc); font-weight:600 }
+  .params { display:none; grid-template-columns:repeat(4,auto); gap:4px 10px; padding:8px 14px; background:var(--card); border-bottom:1px solid var(--line) }
+  .params.open { display:grid } .params label { font-size:12px; color:var(--mute); display:flex; flex-direction:column }
+  .params input { width:80px }
+  .dots { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px }
+  .dot { width:22px; height:22px; border-radius:5px; border:1px solid var(--line); font-size:10px; display:grid; place-items:center; cursor:pointer }
+  .dot.cur { outline:2px solid var(--acc) } .dot.good{background:var(--good);color:#fff} .dot.ok{background:var(--ok);color:#fff} .dot.bad{background:var(--bad);color:#fff}
+  kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 4px; font-size:11px }
+</style>
+</head>
+<body>
+<header>
+  <b>BFD review</b>
+  Gage <input type="text" id="site" value="10172800" list="gl">
+  <datalist id="gl"></datalist>
+  <button id="load">Load</button>
+  Sample <input type="number" id="seed" value="1" style="width:56px" title="random seed for the sample">
+  <button id="ptoggle">Parameters ▾</button>
+  <label><input type="checkbox" id="logy" checked> log-y</label>
+  <div class="prog"><div id="pbar"></div></div>
+  <span class="mute" id="ptxt"></span>
+</header>
+<div class="params" id="params"></div>
+<main>
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <h2 id="title">…</h2>
+      <div class="meta mute" id="meta"></div>
+      <div id="full" style="height:190px"></div>
+      <div id="ctx" style="height:190px"></div>
+    </div>
+    <div class="card"><div id="zoom" style="height:620px"></div></div>
+  </div>
+  <div class="card side">
+    <b id="qtext">Is this a good baseflow event?</b>
+    <div class="rate" id="rate"></div>
+    <div id="tags"></div>
+    <div class="mute" style="margin-top:8px">Mark what <i>you</i> think the boundaries are (click, then click on the top zoom chart):</div>
+    <div class="row">
+      <button id="mkS">Set my start</button><button id="mkE">Set my end</button><button id="mkC">Clear</button>
+    </div>
+    <div class="mute" id="mine"></div>
+    <textarea id="note" placeholder="Note (optional) — e.g. 'rain bump at day 12 should not end it'"></textarea>
+    <div class="nav">
+      <button id="prev">← Back</button><button id="save" class="primary">Save &amp; next ⏎</button><button id="skip">Skip →</button>
+    </div>
+    <div class="dots" id="dots"></div>
+    <div class="mute" style="margin-top:8px">Keys: <kbd>1</kbd> good <kbd>2</kbd> acceptable <kbd>3</kbd> bad · <kbd>Enter</kbd> save &amp; next · <kbd>←</kbd><kbd>→</kbd> move</div>
+  </div>
+</main>
+<script src="/plotly.min.js"></script>
+<script>
+const PARAM_DEFS = [
+  ['bf_ratio_threshold','high threshold (t_hi)',1.00],['bf_ratio_threshold_low','low threshold (t_lo)',0.02],
+  ['low_flow_anchor','low anchor (quantile)',0.33],['high_flow_anchor','high anchor (quantile)',0.43],
+  ['voting_fraction','voting fraction',0.5],['t_c','t_c (days)',10],['d_min','d_min (days)',21],
+  ['use_flatness_vote','flatness override (0/1)',0],['flatness_window','flatness window',15],['flatness_cv_threshold','flatness CV',0.05],
+];
+const TAGS = {
+  event: [['start_too_early','Starts too early (includes storm response)'],['start_too_late','Starts too late (misses early baseflow)'],
+          ['end_too_early','Ends too early (baseflow continues)'],['end_too_late','Ends too late (includes new storm)'],
+          ['should_split','Should be split into 2+ events'],['should_merge','Should merge with neighbor event'],
+          ['not_baseflow','Not baseflow (storm / snowmelt / regulated)'],['too_short','Too short to be worth an event']],
+  probe: [['is_baseflow','Yes — this should be an event'],['partly','Partly — a sub-window should be'],['regulated','Regulated / odd flow']],
+};
+const RATE = {event:[['good','1 Good'],['ok','2 Acceptable'],['bad','3 Bad']],
+              probe:[['good','1 Correctly excluded'],['ok','2 Unsure'],['bad','3 Should be event']]};
+let S = {site:null, items:[], i:0, full:null, judg:{}, rating:null, tags:new Set(), mineS:null, mineE:null, arm:null, params:{}};
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = {q:'#111827', eckhardt:'#2563eb', chapman:'#16a34a', lyne_hollick:'#d97706', boughton:'#9333ea', pybfs:'#db2777', rf_bfd:'#0891b2', flatness:'#64748b'};
+
+// ── params ──
+function buildParams(){
+  $('params').innerHTML = PARAM_DEFS.map(([k,l,d]) => `<label>${l}<input id="p_${k}" value="${d}"></label>`).join('');
+}
+function curParams(){ const o={}; PARAM_DEFS.forEach(([k])=>o[k]=$('p_'+k).value); return new URLSearchParams(o).toString(); }
+
+async function j(url, opt){ const r = await fetch(url, opt); if(!r.ok) throw new Error((await r.json()).error||r.status); return r.json(); }
+
+async function loadGage(){
+  const site = $('site').value.trim(); S.site = site;
+  $('title').textContent = 'Loading '+site+' …';
+  try {
+    const q = curParams();
+    const [full, items, judg] = await Promise.all([
+      j(`/api/gage/${site}/full?${q}`), j(`/api/gage/${site}/items?${q}&seed=${$('seed').value}`), j(`/api/gage/${site}/judgments`)]);
+    S.full = full; S.items = items.items; S.params = items.params; S.judg = judg; S.i = 0;
+    const firstOpen = S.items.findIndex(it => !judg[it.id]); if(firstOpen>=0) S.i = firstOpen;
+    show();
+  } catch(e){ $('title').textContent = 'Error: '+e.message; }
+}
+
+function updateProgress(){
+  const done = S.items.filter(it => S.judg[it.id]).length;
+  $('pbar').style.width = (100*done/Math.max(1,S.items.length))+'%';
+  $('ptxt').textContent = `${done}/${S.items.length} judged · ${S.full.n_events} events in record`;
+  $('dots').innerHTML = S.items.map((it,k)=>{
+    const jd = S.judg[it.id]; return `<div class="dot ${jd?jd.rating:''} ${k===S.i?'cur':''}" data-k="${k}" title="${it.id}">${it.kind==='probe'?'P':k+1}</div>`}).join('');
+  document.querySelectorAll('.dot').forEach(d=>d.onclick=()=>{S.i=+d.dataset.k; show();});
+}
+
+async function show(){
+  const it = S.items[S.i]; if(!it){ $('title').textContent='No items for this gage'; return; }
+  const jd = S.judg[it.id] || {};
+  S.rating = jd.rating||null; S.tags = new Set(jd.tags||[]); S.mineS = jd.my_start||null; S.mineE = jd.my_end||null; S.arm=null;
+  $('note').value = jd.note||'';
+  const kind = it.kind;
+  $('title').textContent = (kind==='probe' ? `Probe ${S.i+1}/${S.items.length} — NOT an event (near miss)` : `Event ${S.i+1}/${S.items.length}`) + ` · gage ${S.site}`;
+  $('qtext').textContent = kind==='probe' ? 'Should this stretch have been a baseflow event?' : 'Is this a good baseflow event?';
+  $('meta').innerHTML = `<span>${it.start} → ${it.end}</span><span>${it.duration} d</span>` +
+    (kind==='event' ? `<span>${it.n_bfd_days} BFD days (${it.gap_days} pooled gap)</span>` : '') + `<span>mean vote ${it.mean_vote}</span>`;
+  $('rate').innerHTML = RATE[kind].map(([v,l])=>`<button data-v="${v}" class="${S.rating===v?'sel':''}">${l}</button>`).join('');
+  document.querySelectorAll('#rate button').forEach(b=>b.onclick=()=>setRating(b.dataset.v));
+  $('tags').innerHTML = TAGS[kind].map(([k,l])=>`<label class="t"><input type="checkbox" data-k="${k}" ${S.tags.has(k)?'checked':''}>${l}</label>`).join('');
+  document.querySelectorAll('#tags input').forEach(c=>c.onchange=()=>{c.checked?S.tags.add(c.dataset.k):S.tags.delete(c.dataset.k)});
+  updateMine(); updateProgress(); drawFull(it); drawCtx(it);
+  const w = await j(`/api/gage/${S.site}/window?${curParams()}&start=${it.start}&end=${it.end}`);
+  if (S.items[S.i] === it) { S.win = w; drawZoom(it, w); }
+}
+function setRating(v){ S.rating=v; document.querySelectorAll('#rate button').forEach(b=>b.classList.toggle('sel', b.dataset.v===v)); }
+function updateMine(){
+  $('mine').textContent = (S.mineS||S.mineE) ? `Mine: ${S.mineS||'?'} → ${S.mineE||'?'}` : '';
+  $('mkS').classList.toggle('armed', S.arm==='s'); $('mkE').classList.toggle('armed', S.arm==='e');
+}
+
+const axisFont = {size:11, color:css('--mute')};
+function baseLayout(extra){ return Object.assign({margin:{l:52,r:12,t:6,b:28}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+  font:{color:css('--ink'), size:11}, showlegend:false}, extra); }
+
+function drawFull(it){
+  const F = S.full, log = $('logy').checked;
+  const q = F.q.map(v => (log && !(v>0)) ? null : v);
+  const shapes = F.events.map(([a,b]) => ({type:'rect', xref:'x', yref:'paper', x0:a, x1:b, y0:0, y1:1, fillcolor:'rgba(37,99,235,.08)', line:{width:0}, layer:'below'}));
+  shapes.push({type:'rect', xref:'x', yref:'paper', x0:it.start, x1:it.end, y0:0, y1:1, fillcolor:'rgba(220,38,38,.35)', line:{color:'#dc2626', width:1}});
+  Plotly.react('full', [{x:F.dates, y:q, mode:'lines', line:{color:css('--ink'), width:.8}, hoverinfo:'x+y', name:'Q'}],
+    baseLayout({shapes, yaxis:{type:log?'log':'linear', title:{text:'Q (cfs)', font:axisFont}, gridcolor:css('--line')}, xaxis:{gridcolor:css('--line')},
+      annotations:[{xref:'paper',yref:'paper',x:0,y:1,xanchor:'left',yanchor:'top',showarrow:false,font:axisFont,text:'whole record · blue = all events · red = this one'}]}),
+    {displayModeBar:false, responsive:true});
+}
+
+function drawCtx(it){
+  const F = S.full, log = $('logy').checked, D = 730*86400000;
+  const t0 = new Date(it.start).getTime()-D, t1 = new Date(it.end).getTime()+D;
+  const xs=[], ys=[];
+  F.dates.forEach((d,k)=>{ const t=new Date(d).getTime(); if(t>=t0&&t<=t1){ xs.push(d); ys.push(log&&!(F.q[k]>0)?null:F.q[k]); }});
+  const shapes = F.events.filter(([a,b])=>new Date(b)>=t0&&new Date(a)<=t1).map(([a,b])=>({type:'rect',xref:'x',yref:'paper',x0:a,x1:b,y0:0,y1:1,fillcolor:'rgba(37,99,235,.16)',line:{width:0},layer:'below'}));
+  shapes.push({type:'rect',xref:'x',yref:'paper',x0:it.start,x1:it.end,y0:0,y1:1,fillcolor:'rgba(220,38,38,.3)',line:{color:'#dc2626',width:1}});
+  Plotly.react('ctx',[{x:xs,y:ys,mode:'lines',line:{color:css('--ink'),width:1}}],
+    baseLayout({shapes,yaxis:{type:log?'log':'linear',title:{text:'Q (cfs)',font:axisFont},gridcolor:css('--line')},xaxis:{gridcolor:css('--line')},
+    annotations:[{xref:'paper',yref:'paper',x:0,y:1,xanchor:'left',yanchor:'top',showarrow:false,font:axisFont,text:'±2 years context'}]}),{displayModeBar:false,responsive:true});
+}
+
+function drawZoom(it, w){
+  const log = $('logy').checked, ys = v => v.map(x => (log && !(x>0)) ? null : x);
+  const tr = [];
+  tr.push({x:w.dates, y:ys(w.q), mode:'lines', name:'Q', line:{color:COL.q, width:2}, xaxis:'x', yaxis:'y'});
+  for (const m of Object.keys(w.baseflow))
+    tr.push({x:w.dates, y:ys(w.baseflow[m]), mode:'lines', name:m, line:{color:COL[m], width:1.1}, xaxis:'x', yaxis:'y', opacity:.85});
+  for (const m of Object.keys(w.ratio))
+    tr.push({x:w.dates, y:w.ratio[m], mode:'lines', name:m+' qb/Q', line:{color:COL[m], width:1.1}, xaxis:'x', yaxis:'y2', showlegend:false, opacity:.85});
+  tr.push({x:w.dates, y:w.threshold, mode:'lines', name:'threshold', line:{color:'#dc2626', width:2, dash:'dash'}, xaxis:'x', yaxis:'y2'});
+  const voters = [...w.labels_all, 'ENSEMBLE'];
+  voters.forEach((v,k) => {
+    const lab = v==='ENSEMBLE' ? w.ens : w.labels[v];
+    const xs=[], yy=[]; lab.forEach((b,idx)=>{ if(b){xs.push(w.dates[idx]); yy.push(k);} });
+    tr.push({x:xs, y:yy, mode:'markers', marker:{symbol:'square', size:7, color:v==='ENSEMBLE'?css('--ink'):COL[v]}, name:v, showlegend:false, xaxis:'x', yaxis:'y3', hoverinfo:'x+text', text:v});
+  });
+  const rects = (x0,x1,fill,line) => ({type:'rect', xref:'x', yref:'paper', x0, x1, y0:0, y1:1, fillcolor:fill, line:{width:line?1:0, color:line||'#000'}, layer:'below'});
+  const shapes = [rects(it.start, it.end, it.kind==='probe'?'rgba(245,158,11,.18)':'rgba(37,99,235,.14)', null)];
+  if (S.mineS) shapes.push({type:'line', xref:'x', yref:'paper', x0:S.mineS, x1:S.mineS, y0:0, y1:1, line:{color:'#16a34a', width:3}});
+  if (S.mineE) shapes.push({type:'line', xref:'x', yref:'paper', x0:S.mineE, x1:S.mineE, y0:0, y1:1, line:{color:'#c026d3', width:3}});
+  const names = voters.map(v => v==='ENSEMBLE' ? 'ENSEMBLE' : v);
+  const layout = baseLayout({
+    shapes, hovermode:'x unified', clickmode:'event',
+    xaxis:{anchor:'y3', gridcolor:css('--line')},
+    yaxis:{domain:[.42,1], type:log?'log':'linear', title:{text:'Q & baseflow (cfs)', font:axisFont}, gridcolor:css('--line')},
+    yaxis2:{domain:[.22,.38], range:[0,1.1], title:{text:'qb / Q', font:axisFont}, gridcolor:css('--line')},
+    yaxis3:{domain:[0,.19], range:[-.6, voters.length-.4], tickvals:voters.map((_,k)=>k), ticktext:names, autorange:false, gridcolor:css('--line')},
+    margin:{l:90,r:12,t:34,b:28},
+    showlegend:true, legend:{orientation:'h', y:1.08, font:{size:11}},
+  });
+  Plotly.react('zoom', tr, layout, {displayModeBar:false, responsive:true}).then(gd => {
+    gd.removeAllListeners && gd.removeAllListeners('plotly_click');
+    gd.on('plotly_click', ev => {
+      if (!S.arm || !ev.points.length) return;
+      const d = String(ev.points[0].x).slice(0,10);
+      if (S.arm==='s') S.mineS = d; else S.mineE = d;
+      S.arm = null; updateMine(); drawZoom(S.items[S.i], S.win);
+    });
+  });
+}
+
+async function save(next=true){
+  const it = S.items[S.i];
+  if (!S.rating){ alert('Pick a rating first (1/2/3).'); return false; }
+  const rec = {site_no:S.site, item_id:it.id, kind:it.kind, start:it.start, end:it.end, duration:it.duration,
+    rating:S.rating, tags:[...S.tags], my_start:S.mineS, my_end:S.mineE, note:$('note').value, params:S.params};
+  await j('/api/judge', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(rec)});
+  S.judg[it.id] = rec;
+  if (next) go(S.i+1); else updateProgress();
+  return true;
+}
+function go(k){
+  if(k<0) k=0;
+  if(k>=S.items.length){
+    const open = S.items.findIndex(it => !S.judg[it.id]);
+    if(open>=0){ alert(`${S.items.filter(it=>!S.judg[it.id]).length} item(s) not judged yet - jumping to the first one.`); S.i=open; show(); return; }
+    updateProgress(); showDone(); return;
+  }
+  S.i=k; show();
+}
+function showDone(){
+  const n = S.items.length;
+  $('title').textContent = `All ${n} items judged for gage ${S.site}`;
+  $('meta').innerHTML = `<b>Done.</b> Tell Claude "done with ${S.site}", or keep going:
+    <button id="more">Review 16 more (new sample)</button>
+    <button id="nextg">Next gage…</button>`;
+  $('more').onclick = () => { $('seed').value = (+$('seed').value)+1; loadGage(); };
+  $('nextg').onclick = () => { const s = prompt('Gage ID:'); if(s){ $('site').value=s.trim(); $('seed').value=1; loadGage(); } };
+  window.scrollTo(0,0);
+}
+$('load').onclick = loadGage;
+$('site').onkeydown = e => { if(e.key==='Enter') loadGage(); };
+$('ptoggle').onclick = () => $('params').classList.toggle('open');
+$('logy').onchange = () => { drawFull(S.items[S.i]); drawCtx(S.items[S.i]); drawZoom(S.items[S.i], S.win); };
+$('save').onclick = () => save(true); $('skip').onclick = () => go(S.i+1); $('prev').onclick = () => go(S.i-1);
+$('mkS').onclick = () => { S.arm = S.arm==='s'?null:'s'; updateMine(); };
+$('mkE').onclick = () => { S.arm = S.arm==='e'?null:'e'; updateMine(); };
+$('mkC').onclick = () => { S.mineS=S.mineE=null; S.arm=null; updateMine(); drawZoom(S.items[S.i], S.win); };
+document.addEventListener('keydown', e => {
+  if (['TEXTAREA','INPUT'].includes(e.target.tagName) && e.target.type!=='checkbox') return;
+  if (e.key==='1') setRating('good'); else if (e.key==='2') setRating('ok'); else if (e.key==='3') setRating('bad');
+  else if (e.key==='Enter') save(true); else if (e.key==='ArrowRight') go(S.i+1); else if (e.key==='ArrowLeft') go(S.i-1);
+});
+buildParams();
+j('/api/gages').then(g => { $('gl').innerHTML = g.cached.map(s=>`<option value="${s}">${g.judged[s]?g.judged[s]+' judged':''}</option>`).join(''); });
+loadGage();
+</script>
+</body>
+</html>

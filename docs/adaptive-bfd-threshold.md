@@ -39,17 +39,22 @@ downsampling, or the response shape belongs here.
 
 ### Request
 
+The four threshold/anchor defaults below were re-tuned against RF-BFD (see
+[rf-referenced-threshold-tuning.md](rf-referenced-threshold-tuning.md)); the
+previous values were 0.95 / 0.75 / 0.10 / 0.50. They are this app's defaults
+only, `bfd_db`'s are unchanged.
+
 `GET /api/gage/<site_no>/bfd_ensemble`
 
 | Param | Default | Meaning |
 |---|---|---|
-| `bf_ratio_threshold` | `0.95` | `t_hi`, threshold at/above the high anchor |
-| `bf_ratio_threshold_low` | `0.75` | `t_lo`, threshold at/below the low anchor |
-| `low_flow_anchor` | `0.10` | low anchor, as a flow quantile |
-| `high_flow_anchor` | `0.50` | high anchor, as a flow quantile |
+| `bf_ratio_threshold` | `1.00` | `t_hi`, threshold at/above the high anchor |
+| `bf_ratio_threshold_low` | `0.02` | `t_lo`, threshold at/below the low anchor |
+| `low_flow_anchor` | `0.33` | low anchor, as a flow quantile |
+| `high_flow_anchor` | `0.43` | high anchor, as a flow quantile |
 | `voting_fraction` | `0.5` | fraction of voters needed for an ensemble BFD |
-| `t_c` | `3` | event pooling gap tolerance, days |
-| `d_min` | `7` | event pooling minimum duration, days |
+| `t_c` | `10` | event pooling gap tolerance, days |
+| `d_min` | `21` | event pooling minimum duration, days |
 
 ### Response fields
 
@@ -63,11 +68,12 @@ downsampling, or the response shape belongs here.
 | `events[].voter_days` | `{voter: int}` | days inside the event each voter called BFD (full-resolution labels), for the hover card |
 | `events[].mean_q` | `float` | mean flow (cfs) over the event |
 | `stats.zero_flow_days` | `int` | zero-flow days in the full record |
+| `baseflow[method]` | `float[]` | per-method baseflow curve for the hydrograph, clamped to 0 on zero-flow days (PyBFS otherwise keeps a recession tail through dry spells) |
 
 A defaults asymmetry worth knowing: `bfd_ensemble.apply_params()` takes
 `bf_ratio_threshold_low=None` and falls back to the flat `bf_ratio_threshold`
 (old behavior), so direct callers of that function are unaffected by default.
-`get_ensemble_result()` and the HTTP route default it to `0.75` — adaptive by
+`get_ensemble_result()` and the HTTP route default it to `0.02` — adaptive by
 default. This mirrors `bfd_db`'s own `PipelineConfig` default (`None` = flat,
 used by the frozen-snapshot database build).
 
@@ -79,10 +85,10 @@ Four sliders in the BFD panel drive the threshold:
 
 | Control | Range | Step | Display |
 |---|---|---|---|
-| X% Threshold — high flow | 0.50 – 1.00 | 0.01 | `95%` |
-| X% Threshold — low flow | 0.50 – 1.00 | 0.01 | `75%` |
-| Low-flow anchor | 0.00 – 0.90 | 0.01 | `P10` |
-| High-flow anchor | 0.10 – 1.00 | 0.01 | `P50` |
+| X% Threshold — high flow | 0.00 – 1.00 | 0.01 | `100%` |
+| X% Threshold — low flow | 0.00 – 1.00 | 0.01 | `2%` |
+| Low-flow anchor | 0.00 – 0.90 | 0.01 | `P33` |
+| High-flow anchor | 0.10 – 1.00 | 0.01 | `P43` |
 
 Feedback surfaces:
 

@@ -1266,13 +1266,13 @@ def api_bfd_ensemble(site_no):
         return jsonify({'error': 'Gage not found'}), 404
 
     try:
-        bf_ratio_threshold = float(request.args.get('bf_ratio_threshold', 0.95))
-        bf_ratio_threshold_low = float(request.args.get('bf_ratio_threshold_low', 0.75))
-        low_flow_anchor = float(request.args.get('low_flow_anchor', bfd_ensemble.LOW_FLOW_ANCHOR))
-        high_flow_anchor = float(request.args.get('high_flow_anchor', bfd_ensemble.HIGH_FLOW_ANCHOR))
+        bf_ratio_threshold = float(request.args.get('bf_ratio_threshold', bfd_ensemble.DEFAULT_BF_RATIO_THRESHOLD))
+        bf_ratio_threshold_low = float(request.args.get('bf_ratio_threshold_low', bfd_ensemble.DEFAULT_BF_RATIO_THRESHOLD_LOW))
+        low_flow_anchor = float(request.args.get('low_flow_anchor', bfd_ensemble.DEFAULT_LOW_FLOW_ANCHOR))
+        high_flow_anchor = float(request.args.get('high_flow_anchor', bfd_ensemble.DEFAULT_HIGH_FLOW_ANCHOR))
         voting_fraction = float(request.args.get('voting_fraction', 0.5))
-        t_c = int(request.args.get('t_c', 3))
-        d_min = int(request.args.get('d_min', 7))
+        t_c = int(request.args.get('t_c', bfd_ensemble.DEFAULT_T_C))
+        d_min = int(request.args.get('d_min', bfd_ensemble.DEFAULT_D_MIN))
         use_flatness_vote = request.args.get('use_flatness_vote', 'false').lower() == 'true'
         flatness_window = int(request.args.get('flatness_window', bfd_ensemble.FLATNESS_WINDOW))
         flatness_cv_threshold = float(request.args.get('flatness_cv_threshold', bfd_ensemble.FLATNESS_CV_THRESHOLD))
@@ -1587,13 +1587,13 @@ def api_bfd_ensemble_skill(site_no):
     try:
         ens = bfd_ensemble.get_ensemble_result(
             site_no,
-            bf_ratio_threshold=float(request.args.get('bf_ratio_threshold', 0.95)),
-            bf_ratio_threshold_low=float(request.args.get('bf_ratio_threshold_low', 0.75)),
-            low_flow_anchor=float(request.args.get('low_flow_anchor', bfd_ensemble.LOW_FLOW_ANCHOR)),
-            high_flow_anchor=float(request.args.get('high_flow_anchor', bfd_ensemble.HIGH_FLOW_ANCHOR)),
+            bf_ratio_threshold=float(request.args.get('bf_ratio_threshold', bfd_ensemble.DEFAULT_BF_RATIO_THRESHOLD)),
+            bf_ratio_threshold_low=float(request.args.get('bf_ratio_threshold_low', bfd_ensemble.DEFAULT_BF_RATIO_THRESHOLD_LOW)),
+            low_flow_anchor=float(request.args.get('low_flow_anchor', bfd_ensemble.DEFAULT_LOW_FLOW_ANCHOR)),
+            high_flow_anchor=float(request.args.get('high_flow_anchor', bfd_ensemble.DEFAULT_HIGH_FLOW_ANCHOR)),
             voting_fraction=float(request.args.get('voting_fraction', 0.5)),
-            t_c=int(request.args.get('t_c', 3)),
-            d_min=int(request.args.get('d_min', 7)),
+            t_c=int(request.args.get('t_c', bfd_ensemble.DEFAULT_T_C)),
+            d_min=int(request.args.get('d_min', bfd_ensemble.DEFAULT_D_MIN)),
             use_flatness_vote=request.args.get('use_flatness_vote', 'false').lower() == 'true',
             flatness_window=int(request.args.get('flatness_window', bfd_ensemble.FLATNESS_WINDOW)),
             flatness_cv_threshold=float(request.args.get('flatness_cv_threshold', bfd_ensemble.FLATNESS_CV_THRESHOLD)),
