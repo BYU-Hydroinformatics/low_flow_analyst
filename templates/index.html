@@ -191,6 +191,8 @@
         .bfd-focus .bfd-focus-info { color:#8e24aa; margin-left:4px; }
         .bfd-fs-controls { display:none; gap:24px; align-items:center; margin:0 0 8px; font-size:12px; color:#555; }
         #bfd-plot-holder.fs .bfd-fs-controls { display:flex; flex-wrap:wrap; }
+        .bfd-fs-gage { display:none; }
+        #bfd-plot-holder.fs .bfd-fs-gage { display:inline; }
         .bfd-fs-controls .bfd-fs-param { display:flex; align-items:center; gap:8px; flex:1 1 260px; max-width:420px; }
         .bfd-fs-controls input[type=range] { flex:1; accent-color:#8e24aa; }
         .bfd-fs-controls .bfd-param-value { min-width:34px; text-align:right; font-weight:600; color:#6a1b9a; }
@@ -1216,7 +1218,7 @@
         function openFullscreen(plotId, title) {
             const overlay = document.getElementById('fs-overlay');
             const body = document.getElementById('fs-body');
-            document.getElementById('fs-title').textContent = title + ' - ' + lastPlotSiteNo;
+            document.getElementById('fs-title').textContent = `${title} \u2014 Gage ${selectedSite || lastPlotSiteNo}`;
             body.innerHTML = '<div id="fs-plot" style="width:100%;height:100%;"></div>';
             overlay.classList.add('active');
 
@@ -1487,7 +1489,7 @@
 
         // ===== BFD Ensemble =====
         // Per-gage tunable parameters (bf_ratio_threshold = "X% threshold").
-        let bfdParams = { bf_ratio_threshold: 1.00, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.43, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
+        let bfdParams = { bf_ratio_threshold: 0.96, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.56, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
         // Categorical slots 1-5 of the validated palette, pinned per method so a
         // method keeps its colour whether or not the others are present.
         const BFD_METHOD_COLORS = {
@@ -1516,7 +1518,7 @@
 
         async function loadBfdEnsemble(siteNo) {
             const container = document.getElementById('bfd-ensemble-container');
-            bfdParams = { bf_ratio_threshold: 1.00, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.43, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
+            bfdParams = { bf_ratio_threshold: 0.96, bf_ratio_threshold_low: 0.02, low_flow_anchor: 0.33, high_flow_anchor: 0.56, voting_fraction: 0.5, t_c: 10, d_min: 21, use_flatness_vote: false, flatness_window: 15, flatness_cv_threshold: 0.05 };
             bfdSkillOn = false;
             bfdFocus = null;
             bfdYUser = null;
@@ -1729,6 +1731,8 @@
             const holder = document.getElementById('bfd-plot-holder');
             const expandBtn = holder && holder.querySelector('.expand-btn');
             if (expandBtn) expandBtn.onclick = () => bfdToggleFullscreen();
+            holder?.querySelector('.plot-header > span')
+                ?.insertAdjacentHTML('beforeend', `<span class="bfd-fs-gage"> &mdash; Gage ${siteNo}</span>`);
             if (bfdFullscreen) { holder.classList.add('fs'); bfdSyncExpandButton(); }
             setTimeout(() => { renderBfdChart(data); bfdFocusUpdated(false); }, 0);
             if (bfdSkillOn && bfdCalibrated) loadBfdSkill(siteNo);
@@ -2843,7 +2847,7 @@
             const rmseStr = seq.rmse !== null ? seq.rmse.toFixed(4) : 'N/A';
             const maeStr  = seq.mae  !== null ? seq.mae.toFixed(4)  : 'N/A';
             document.getElementById('fc-modal-info').innerHTML = `
-                <div class="fc-seq-label">${fcNoun.charAt(0).toUpperCase() + fcNoun.slice(1)} ${seq.seq} <span style="font-weight:400;color:#aaa">of ${n}</span></div>
+                <div class="fc-seq-label">${selectedSite ? `Gage ${selectedSite} &nbsp;&middot;&nbsp; ` : ''}${fcNoun.charAt(0).toUpperCase() + fcNoun.slice(1)} ${seq.seq} <span style="font-weight:400;color:#aaa">of ${n}</span></div>
                 <div class="fc-seq-meta">${seq.start_date} &mdash; ${seq.end_date} &nbsp;&middot;&nbsp; ${seq.len} days</div>
                 ${seq.meta ? `<div class="fc-seq-meta">${seq.meta.voters.map(r => `${r.days / seq.meta.duration >= 0.5 ? '\u2713' : '\u2717'} ${r.label} ${r.days}/${seq.meta.duration}`).join(' &nbsp;&middot;&nbsp; ')}</div>` : ''}
                 <div class="fc-seq-metrics">
@@ -2989,24 +2993,54 @@
             }, { ...plotlyConfig, responsive: false });
         }
 
-        // Bottom-right: forecast vs observed + error band
+        // Bottom-right: forecast vs observed, shaded red where the forecast is above
+        // observed and green where it is below
         function renderFcPanel(seqIdx) {
             const { dates: seqDates, q: seqQ, fc: seqFcVals } = fcSeqData(seqIdx);
-            const residuals = seqQ.map((q, i) =>
-                q !== null && seqFcVals[i] !== null ? q - seqFcVals[i] : null);
             const { detailH } = fcHeights();
 
+            // Insert the interpolated crossing point between days where the sign of
+            // (forecast - observed) flips, so each colored band closes exactly there.
+            const x = [], base = [], hi = [], lo = [];
+            const push = (d, q, f) => {
+                x.push(d); base.push(q);
+                hi.push(q === null ? null : Math.max(q, f));
+                lo.push(q === null ? null : Math.min(q, f));
+            };
+            for (let i = 0; i < seqDates.length; i++) {
+                const q = seqQ[i], f = seqFcVals[i];
+                const ok = q !== null && f !== null && !isNaN(q) && !isNaN(f);
+                if (i > 0 && ok && x.length && base[base.length - 1] !== null) {
+                    const q0 = seqQ[i - 1], f0 = seqFcVals[i - 1];
+                    const e0 = f0 - q0, e1 = f - q;
+                    if (e0 * e1 < 0) {
+                        const t = e0 / (e0 - e1);
+                        const t0 = Date.parse(seqDates[i - 1]), t1 = Date.parse(seqDates[i]);
+                        const xc = new Date(t0 + t * (t1 - t0)).toISOString().slice(0, 16);
+                        const qc = q0 + t * (q - q0);
+                        push(xc, qc, qc);
+                    }
+                }
+                if (ok) push(seqDates[i], q, f);
+                else push(seqDates[i], null, null);
+            }
+
+            const bandBase = { x, y: base, mode: 'lines', line: { width: 0 },
+                               showlegend: false, hoverinfo: 'skip' };
             const traces = [
-                { x: seqDates, y: residuals, name: 'Error (Q − Forecast)',
-                  mode: 'lines', fill: 'tozeroy', fillcolor: 'rgba(244,67,54,0.12)',
-                  line: { color: 'rgba(244,67,54,0.45)', width: 1 }, yaxis: 'y2' },
+                bandBase,
+                { x, y: hi, name: 'Forecast above observed', mode: 'lines', fill: 'tonexty',
+                  fillcolor: 'rgba(229,57,53,0.30)', line: { width: 0 }, hoverinfo: 'skip' },
+                bandBase,
+                { x, y: lo, name: 'Forecast below observed', mode: 'lines', fill: 'tonexty',
+                  fillcolor: 'rgba(67,160,71,0.30)', line: { width: 0 }, hoverinfo: 'skip' },
                 { x: seqDates, y: seqFcVals, name: 'Forecast BF', mode: 'lines',
                   line: { color: '#5c6bc0', width: 2, dash: 'dash' } },
                 { x: seqDates, y: seqQ, name: 'Observed Q', mode: 'lines',
                   line: { color: '#222', width: 1.5 } },
             ];
             Plotly.react('fc-modal-fc', traces, {
-                margin: { l: 58, r: 50, t: 8, b: 42 }, height: detailH,
+                margin: { l: 58, r: 12, t: 8, b: 42 }, height: detailH,
                 plot_bgcolor: '#fafafa', paper_bgcolor: '#fff',
                 font: { family: '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif', size: 11 },
                 hovermode: 'x unified',
@@ -3015,10 +3049,6 @@
                          title: { text: 'Date', font: { size: 10 } } },
                 yaxis: { gridcolor: '#e8e8e8', zeroline: false, rangemode: 'tozero',
                          title: { text: 'Flow (m³/s)', font: { size: 10 } } },
-                yaxis2: { overlaying: 'y', side: 'right', zeroline: true,
-                          zerolinecolor: '#f44336', zerolinewidth: 1, showgrid: false,
-                          title: { text: 'Error (m³/s)', font: { size: 9, color: '#f44336' } },
-                          tickfont: { color: '#f44336', size: 9 } },
             }, { ...plotlyConfig, responsive: false });
         }
 
