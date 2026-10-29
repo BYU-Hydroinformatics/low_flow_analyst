@@ -33,14 +33,6 @@ With the voting fraction free, the best set reached 0.33 (t_hi 1.0,
 t_lo 0.02, anchors 0.33/0.38, voting fraction 0.85). A separate threshold per
 method did no better (0.32).
 
-## Later change: t_hi 1.00 -> 0.96 (2026-10-28)
-
-The app default for t_hi was relaxed to 0.96 by choice. On the 145 cached gages
-(all gages, not a held-out split) this lowers the mean kappa of the filter vote
-vs RF-BFD from 0.340 to 0.327, raises the share of days above the high anchor
-labeled BFD from 7.4 % to 11.6 %, and the share of all days from 42.7 % to
-45.3 %. Days below the low anchor are unaffected (98.5 %).
-
 ## Caveats
 
 - RF-BFD is a reference, not ground truth. In the manual event review on

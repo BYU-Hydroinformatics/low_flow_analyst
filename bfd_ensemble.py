@@ -55,10 +55,10 @@ _DEFAULT_CONFIG = PipelineConfig()
 # checked on 45 held-out gages (kappa vs RF-BFD 0.13 -> 0.29); see
 # docs/rf-referenced-threshold-tuning.md. These are the LFA app's defaults only:
 # bfd_db's own defaults (and the national database build) are unchanged.
-DEFAULT_BF_RATIO_THRESHOLD = 0.96      # t_hi
+DEFAULT_BF_RATIO_THRESHOLD = 1.00      # t_hi
 DEFAULT_BF_RATIO_THRESHOLD_LOW = 0.02  # t_lo
 DEFAULT_LOW_FLOW_ANCHOR = 0.33
-DEFAULT_HIGH_FLOW_ANCHOR = 0.56
+DEFAULT_HIGH_FLOW_ANCHOR = 0.43
 
 # Event pooling defaults (days): gaps up to T_C are merged, events shorter than
 # D_MIN are dropped.
