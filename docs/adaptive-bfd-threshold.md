@@ -48,10 +48,10 @@ only, `bfd_db`'s are unchanged.
 
 | Param | Default | Meaning |
 |---|---|---|
-| `bf_ratio_threshold` | `1.00` | `t_hi`, threshold at/above the high anchor |
+| `bf_ratio_threshold` | `0.96` | `t_hi`, threshold at/above the high anchor |
 | `bf_ratio_threshold_low` | `0.02` | `t_lo`, threshold at/below the low anchor |
 | `low_flow_anchor` | `0.33` | low anchor, as a flow quantile |
-| `high_flow_anchor` | `0.43` | high anchor, as a flow quantile |
+| `high_flow_anchor` | `0.56` | high anchor, as a flow quantile |
 | `voting_fraction` | `0.5` | fraction of voters needed for an ensemble BFD |
 | `t_c` | `10` | event pooling gap tolerance, days |
 | `d_min` | `21` | event pooling minimum duration, days |
@@ -88,7 +88,7 @@ Four sliders in the BFD panel drive the threshold:
 | X% Threshold — high flow | 0.00 – 1.00 | 0.01 | `100%` |
 | X% Threshold — low flow | 0.00 – 1.00 | 0.01 | `2%` |
 | Low-flow anchor | 0.00 – 0.90 | 0.01 | `P33` |
-| High-flow anchor | 0.10 – 1.00 | 0.01 | `P43` |
+| High-flow anchor | 0.10 – 1.00 | 0.01 | `P56` |
 
 Feedback surfaces:
 

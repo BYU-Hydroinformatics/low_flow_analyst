@@ -34,6 +34,7 @@ Then open **http://127.0.0.1:5000** in your browser. The app ships with pre-cali
   - [Step 5 — Run the App](#step-5--run-the-app)
 - [Usage](#usage)
 - [API Reference](#api-reference)
+- [BFD Ensemble and Event Review](#bfd-ensemble-and-event-review)
 - [Directory Structure](#directory-structure)
 - [Configuration](#configuration)
 - [Deploying to Render](#deploying-to-render)
@@ -403,9 +404,43 @@ Detects and ranks extreme low-flow and high-flow events, correlates with drought
 }
 ```
 
+### GET `/api/gage/<site_no>/bfd_ensemble`
+
+Runs the BFD ensemble (see [BFD Ensemble and Event Review](#bfd-ensemble-and-event-review)) for one gage. Optional query parameters:
+
+| Param | Default | Description |
+|---|---|---|
+| `bf_ratio_threshold` | 0.96 | Baseflow-ratio threshold at high flow |
+| `bf_ratio_threshold_low` | 0.02 | Baseflow-ratio threshold at low flow |
+| `low_flow_anchor` / `high_flow_anchor` | 0.33 / 0.56 | Flow-magnitude anchors for the adaptive threshold |
+| `voting_fraction` | 0.5 | Fraction of voters required for a majority |
+| `t_c` / `d_min` | 10 / 21 | Event pooling gap and minimum duration (days) |
+| `use_flatness_vote` | false | Enable the flatness override |
+| `flatness_window` / `flatness_cv_threshold` | 15 / 0.05 | Flatness override settings |
+
+See [docs/adaptive-bfd-threshold.md](docs/adaptive-bfd-threshold.md) for the full response shape. `/api/gage/<site_no>/bfd_ensemble_skill` takes the same parameters.
+
 ### GET `/plots/<site_no>/<filename>?source=original|updated`
 
 Serves pre-computed static plot PNGs.
+
+---
+
+## BFD Ensemble and Event Review
+
+The BFD ensemble panel pools six voters: RF-BFD, Eckhardt, Chapman, Lyne-Hollick, Boughton, and PyBFS. A day is flagged by majority vote, and the flagged days are pooled into events using `t_c` / `d_min`. The adapter lives in `bfd_ensemble.py` and calls the `bfd_db` package; raw per-method estimates are cached in `bfd_ensemble_cache/` (git-ignored).
+
+The threshold defaults listed under the API Reference were re-tuned on 2026-10-12 so the digital-filter voters agree with RF-BFD, which is used as a reference. On held-out gages, kappa against RF-BFD rose from 0.13 to 0.29 (45 gages). `t_c` / `d_min` were set to 10 / 21 by choice, not by the search. These are LFA app defaults only; the `bfd_db` defaults are unchanged. See [docs/rf-referenced-threshold-tuning.md](docs/rf-referenced-threshold-tuning.md) for the method and results.
+
+### Event review app
+
+A small Flask + Plotly app for reviewing detected events (`review_app/`; see its README for details):
+
+```bash
+venv/bin/python review_app/server.py
+```
+
+Then open **http://localhost:5055**. Saved judgments are written to `review_app/judgments/` (git-ignored).
 
 ---
 
@@ -418,6 +453,18 @@ lfa/
 ├── detect_low_flow_gages.py        # Step 2: low-flow classification
 ├── calibrate_all_gages.py          # Step 3: BFS calibration
 ├── run_bfs_all_gages.py            # Step 4: batch BFS + plots
+├── bfd_ensemble.py                 # Adapter to bfd_db for the BFD ensemble panel
+├── bfd_ensemble_cache/             # Cached raw per-method estimates (git-ignored)
+│
+├── review_app/                     # Flask + Plotly event review app
+│   ├── server.py
+│   ├── index.html
+│   ├── README.md
+│   └── judgments/                  # Saved reviews (git-ignored)
+│
+├── docs/
+│   ├── adaptive-bfd-threshold.md
+│   └── rf-referenced-threshold-tuning.md
 │
 ├── templates/
 │   └── index.html                  # Map SPA (Leaflet + Plotly)
